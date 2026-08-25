@@ -13,35 +13,58 @@ import android.net.Uri;
 
 import org.opencv.android.Utils;
 import org.opencv.core.Core;
-import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfPoint;
 import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.Point;
 import org.opencv.core.Rect;
-import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgproc.CLAHE;
 import org.opencv.imgproc.Imgproc;
 
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 final class ImageUtils {
     private ImageUtils() {}
 
+    private static volatile Boolean opencvReady = null;
+
+    private static boolean ensureOpenCv() {
+        if (opencvReady != null) return opencvReady;
+        synchronized (ImageUtils.class) {
+            if (opencvReady != null) return opencvReady;
+            boolean ok = false;
+            try {
+                System.loadLibrary("opencv_java4");
+                ok = true;
+            } catch (Throwable ignored) {
+                ok = false;
+            }
+            opencvReady = ok;
+            return ok;
+        }
+    }
+
     static Bitmap loadBitmap(ContentResolver resolver, Uri uri, int maxDim) throws Exception {
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
-        try (InputStream in = resolver.openInputStream(uri)) { BitmapFactory.decodeStream(in, null, bounds); }
+        try (InputStream in = resolver.openInputStream(uri)) {
+            BitmapFactory.decodeStream(in, null, bounds);
+        }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw new Exception("無法讀取圖片尺寸");
+
         int sample = 1;
         while (Math.max(bounds.outWidth / sample, bounds.outHeight / sample) > maxDim) sample *= 2;
         BitmapFactory.Options opts = new BitmapFactory.Options();
         opts.inSampleSize = Math.max(1, sample);
         opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
         Bitmap bmp;
-        try (InputStream in = resolver.openInputStream(uri)) { bmp = BitmapFactory.decodeStream(in, null, opts); }
+        try (InputStream in = resolver.openInputStream(uri)) {
+            bmp = BitmapFactory.decodeStream(in, null, opts);
+        }
         if (bmp == null) throw new Exception("無法讀取圖片");
 
         int rotation = 0;
@@ -51,9 +74,11 @@ final class ImageUtils {
             if (o == ExifInterface.ORIENTATION_ROTATE_90) rotation = 90;
             else if (o == ExifInterface.ORIENTATION_ROTATE_180) rotation = 180;
             else if (o == ExifInterface.ORIENTATION_ROTATE_270) rotation = 270;
-        } catch (Exception ignored) {}
+        } catch (Throwable ignored) {}
+
         if (rotation != 0) {
-            Matrix m = new Matrix(); m.postRotate(rotation);
+            Matrix m = new Matrix();
+            m.postRotate(rotation);
             Bitmap rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.getWidth(), bmp.getHeight(), m, true);
             if (rotated != bmp) bmp.recycle();
             bmp = rotated;
@@ -70,87 +95,122 @@ final class ImageUtils {
     }
 
     static PointF[] detectDocumentCorners(Bitmap src) {
-        Mat original = new Mat();
-        Mat small = new Mat();
+        if (src == null || src.isRecycled()) return null;
+        if (!ensureOpenCv()) return fallbackDetectDocumentCorners(src);
+
+        Bitmap detectBitmap = null;
+        Mat rgba = new Mat();
         Mat gray = new Mat();
-        Utils.bitmapToMat(src, original);
-        double scale = Math.min(1.0, 1200.0 / Math.max(src.getWidth(), src.getHeight()));
-        if (scale < 1.0) Imgproc.resize(original, small, new Size(src.getWidth()*scale, src.getHeight()*scale), 0, 0, Imgproc.INTER_AREA);
-        else original.copyTo(small);
-        Imgproc.cvtColor(small, gray, Imgproc.COLOR_RGBA2GRAY);
-        Imgproc.GaussianBlur(gray, gray, new Size(5,5), 0);
-
-        Candidate best = null;
         ArrayList<Mat> maps = new ArrayList<>();
-        int[][] canny = {{35,105},{55,165},{80,220}};
-        for (int[] t : canny) {
-            Mat edge = new Mat();
-            Imgproc.Canny(gray, edge, t[0], t[1]);
-            Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5,5));
-            Imgproc.morphologyEx(edge, edge, Imgproc.MORPH_CLOSE, kernel);
-            kernel.release();
-            maps.add(edge);
+        try {
+            final int maxDetectDim = 1200;
+            double scale = Math.min(1.0, maxDetectDim / (double)Math.max(src.getWidth(), src.getHeight()));
+            int dw = Math.max(32, (int)Math.round(src.getWidth() * scale));
+            int dh = Math.max(32, (int)Math.round(src.getHeight() * scale));
+            detectBitmap = scale < 1.0 ? Bitmap.createScaledBitmap(src, dw, dh, true) : src;
+
+            Utils.bitmapToMat(detectBitmap, rgba);
+            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
+            Imgproc.GaussianBlur(gray, gray, new Size(5,5), 0);
+
+            Candidate best = null;
+            int[][] canny = {{30,90},{45,135},{60,180},{80,220}};
+            for (int[] t : canny) {
+                Mat edge = new Mat();
+                Imgproc.Canny(gray, edge, t[0], t[1]);
+                Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5,5));
+                Imgproc.morphologyEx(edge, edge, Imgproc.MORPH_CLOSE, kernel);
+                kernel.release();
+                maps.add(edge);
+            }
+
+            Mat adaptive = new Mat();
+            Imgproc.adaptiveThreshold(gray, adaptive, 255, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 31, 9);
+            Mat adaptiveKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(7,7));
+            Imgproc.morphologyEx(adaptive, adaptive, Imgproc.MORPH_CLOSE, adaptiveKernel);
+            adaptiveKernel.release();
+            maps.add(adaptive);
+
+            for (Mat edge : maps) {
+                Candidate c = findBestQuad(edge, rgba.cols(), rgba.rows());
+                if (c != null && (best == null || c.score > best.score)) best = c;
+            }
+
+            if (best == null) return fallbackDetectDocumentCorners(src);
+            float inv = (float)(1.0 / scale);
+            PointF[] result = new PointF[4];
+            for (int i=0;i<4;i++) {
+                result[i] = new PointF((float)best.points[i].x * inv, (float)best.points[i].y * inv);
+            }
+            if (!validQuad(result, src.getWidth(), src.getHeight())) return fallbackDetectDocumentCorners(src);
+            return result;
+        } catch (Throwable ignored) {
+            return fallbackDetectDocumentCorners(src);
+        } finally {
+            for (Mat m : maps) {
+                try { m.release(); } catch (Throwable ignored) {}
+            }
+            try { gray.release(); } catch (Throwable ignored) {}
+            try { rgba.release(); } catch (Throwable ignored) {}
+            if (detectBitmap != null && detectBitmap != src && !detectBitmap.isRecycled()) detectBitmap.recycle();
         }
-        Mat adaptive = new Mat();
-        Imgproc.adaptiveThreshold(gray, adaptive, 255, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 31, 9);
-        Mat adaptiveKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(7,7));
-        Imgproc.morphologyEx(adaptive, adaptive, Imgproc.MORPH_CLOSE, adaptiveKernel);
-        adaptiveKernel.release();
-        maps.add(adaptive);
-
-        for (Mat edge : maps) {
-            Candidate c = findBestQuad(edge, small.cols(), small.rows());
-            if (c != null && (best == null || c.score > best.score)) best = c;
-        }
-
-        for (Mat m : maps) m.release();
-        gray.release(); small.release(); original.release();
-        if (best == null) return defaultCorners(src);
-
-        float inv = (float)(1.0 / scale);
-        PointF[] result = new PointF[4];
-        for (int i=0;i<4;i++) result[i] = new PointF((float)best.points[i].x*inv, (float)best.points[i].y*inv);
-        if (!validQuad(result, src.getWidth(), src.getHeight())) return defaultCorners(src);
-        return result;
     }
 
     private static Candidate findBestQuad(Mat binary, int w, int h) {
         ArrayList<MatOfPoint> contours = new ArrayList<>();
         Mat hierarchy = new Mat();
-        Imgproc.findContours(binary.clone(), contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE);
-        hierarchy.release();
-        Candidate best = null;
-        double imageArea = w * (double)h;
+        Mat copy = binary.clone();
+        try {
+            Imgproc.findContours(copy, contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE);
+            Candidate best = null;
+            double imageArea = w * (double)h;
 
-        for (MatOfPoint contour : contours) {
-            double area = Math.abs(Imgproc.contourArea(contour));
-            if (area < imageArea * 0.12 || area > imageArea * 0.995) { contour.release(); continue; }
-            MatOfPoint2f c2 = new MatOfPoint2f(contour.toArray());
-            double peri = Imgproc.arcLength(c2, true);
-            for (double eps : new double[]{0.015,0.02,0.028,0.035}) {
-                MatOfPoint2f approx = new MatOfPoint2f();
-                Imgproc.approxPolyDP(c2, approx, peri*eps, true);
-                Point[] pts = approx.toArray();
-                if (pts.length == 4) {
-                    MatOfPoint poly = new MatOfPoint(pts);
-                    boolean convex = Imgproc.isContourConvex(poly);
-                    poly.release();
-                    if (convex) {
-                        Point[] ordered = orderPoints(pts);
-                        double score = quadScore(ordered, area, imageArea, w, h);
-                        if (score > 0 && (best == null || score > best.score)) best = new Candidate(ordered, score);
+            for (MatOfPoint contour : contours) {
+                try {
+                    double area = Math.abs(Imgproc.contourArea(contour));
+                    if (area < imageArea * 0.12 || area > imageArea * 0.995) continue;
+                    MatOfPoint2f c2 = new MatOfPoint2f(contour.toArray());
+                    try {
+                        double peri = Imgproc.arcLength(c2, true);
+                        for (double eps : new double[]{0.012,0.016,0.020,0.026,0.034}) {
+                            MatOfPoint2f approx = new MatOfPoint2f();
+                            try {
+                                Imgproc.approxPolyDP(c2, approx, peri*eps, true);
+                                Point[] pts = approx.toArray();
+                                if (pts.length != 4) continue;
+                                MatOfPoint poly = new MatOfPoint(pts);
+                                boolean convex;
+                                try { convex = Imgproc.isContourConvex(poly); }
+                                finally { poly.release(); }
+                                if (!convex) continue;
+                                Point[] ordered = orderPoints(pts);
+                                double score = quadScore(ordered, area, imageArea, w, h);
+                                if (score > 0 && (best == null || score > best.score)) best = new Candidate(ordered, score);
+                            } finally {
+                                approx.release();
+                            }
+                        }
+                    } finally {
+                        c2.release();
                     }
+                } finally {
+                    contour.release();
                 }
-                approx.release();
             }
-            c2.release(); contour.release();
+            return best;
+        } finally {
+            copy.release();
+            hierarchy.release();
+            for (MatOfPoint c : contours) {
+                try { c.release(); } catch (Throwable ignored) {}
+            }
         }
-        return best;
     }
 
     private static double quadScore(Point[] p, double area, double imageArea, int w, int h) {
         double minSide = Math.min(Math.min(distance(p[0],p[1]), distance(p[1],p[2])), Math.min(distance(p[2],p[3]), distance(p[3],p[0])));
         if (minSide < Math.min(w,h)*0.12) return -1;
+
         double anglePenalty = 0;
         for (int i=0;i<4;i++) {
             Point prev = p[(i+3)%4], cur = p[i], next = p[(i+1)%4];
@@ -160,7 +220,11 @@ final class ImageUtils {
         }
         anglePenalty /= 4.0;
         if (anglePenalty > 0.72) return -1;
-        Rect r = Imgproc.boundingRect(new MatOfPoint(p));
+
+        MatOfPoint temp = new MatOfPoint(p);
+        Rect r;
+        try { r = Imgproc.boundingRect(temp); }
+        finally { temp.release(); }
         double fill = area / Math.max(1.0, r.area());
         double areaRatio = area / imageArea;
         double score = areaRatio * 100.0 + fill * 8.0 + (1.0-anglePenalty)*10.0;
@@ -173,19 +237,83 @@ final class ImageUtils {
         double minSum=Double.MAX_VALUE,maxSum=-Double.MAX_VALUE,minDiff=Double.MAX_VALUE,maxDiff=-Double.MAX_VALUE;
         for(Point p:pts){
             double sum=p.x+p.y,diff=p.x-p.y;
-            if(sum<minSum){minSum=sum;tl=p;} if(sum>maxSum){maxSum=sum;br=p;}
-            if(diff>maxDiff){maxDiff=diff;tr=p;} if(diff<minDiff){minDiff=diff;bl=p;}
+            if(sum<minSum){minSum=sum;tl=p;}
+            if(sum>maxSum){maxSum=sum;br=p;}
+            if(diff>maxDiff){maxDiff=diff;tr=p;}
+            if(diff<minDiff){minDiff=diff;bl=p;}
         }
         return new Point[]{tl,tr,br,bl};
     }
 
     private static boolean validQuad(PointF[] p, int w, int h) {
+        if (p == null || p.length != 4) return false;
         double area=0;
-        for(int i=0;i<4;i++){PointF a=p[i],b=p[(i+1)%4];area+=a.x*b.y-b.x*a.y;}
+        for(int i=0;i<4;i++){
+            PointF a=p[i],b=p[(i+1)%4];
+            if (a == null || b == null) return false;
+            area+=a.x*b.y-b.x*a.y;
+        }
         area=Math.abs(area)/2.0;
         if(area < w*h*0.12) return false;
         for(int i=0;i<4;i++) if(dist(p[i],p[(i+1)%4])<Math.min(w,h)*.10) return false;
         return true;
+    }
+
+    private static PointF[] fallbackDetectDocumentCorners(Bitmap src) {
+        try {
+            final int max = 900;
+            float scale = Math.min(1f, max / (float)Math.max(src.getWidth(), src.getHeight()));
+            int w = Math.max(32, Math.round(src.getWidth()*scale));
+            int h = Math.max(32, Math.round(src.getHeight()*scale));
+            Bitmap b = scale < 1f ? Bitmap.createScaledBitmap(src, w, h, true) : src;
+            int[] px = new int[w*h];
+            b.getPixels(px, 0, w, 0, 0, w, h);
+            int[] gray = new int[w*h];
+            for (int i=0;i<px.length;i++) {
+                int c=px[i];
+                gray[i]=(Color.red(c)*30+Color.green(c)*59+Color.blue(c)*11)/100;
+            }
+            int[] blur = gray.clone();
+            for (int y=1;y<h-1;y++) for (int x=1;x<w-1;x++) {
+                int i=y*w+x;
+                blur[i]=(gray[i]+gray[i-1]+gray[i+1]+gray[i-w]+gray[i+w])/5;
+            }
+            ArrayList<Integer> mags = new ArrayList<>((w*h)/16);
+            int[] mag = new int[w*h];
+            for (int y=2;y<h-2;y++) for (int x=2;x<w-2;x++) {
+                int i=y*w+x;
+                int gx = -blur[i-w-1]-2*blur[i-1]-blur[i+w-1] + blur[i-w+1]+2*blur[i+1]+blur[i+w+1];
+                int gy = -blur[i-w-1]-2*blur[i-w]-blur[i-w+1] + blur[i+w-1]+2*blur[i+w]+blur[i+w+1];
+                int m = Math.abs(gx)+Math.abs(gy);
+                mag[i]=m;
+                if ((x%4==0)&&(y%4==0)) mags.add(m);
+            }
+            if (mags.isEmpty()) {
+                if (b!=src) b.recycle();
+                return defaultCorners(src);
+            }
+            Collections.sort(mags);
+            int threshold = Math.max(80, mags.get((int)(mags.size()*0.90f)));
+
+            float minSum=Float.MAX_VALUE, maxSum=-Float.MAX_VALUE, minDiff=Float.MAX_VALUE, maxDiff=-Float.MAX_VALUE;
+            PointF tl=null,tr=null,br=null,bl=null;
+            int marginX=Math.max(2,(int)(w*.02f)), marginY=Math.max(2,(int)(h*.02f));
+            for (int y=marginY;y<h-marginY;y+=2) for (int x=marginX;x<w-marginX;x+=2) {
+                if (mag[y*w+x] < threshold) continue;
+                float sum=x+y, diff=x-y;
+                if (sum<minSum){minSum=sum;tl=new PointF(x,y);}
+                if(sum>maxSum){maxSum=sum;br=new PointF(x,y);}
+                if (diff>maxDiff){maxDiff=diff;tr=new PointF(x,y);}
+                if(diff<minDiff){minDiff=diff;bl=new PointF(x,y);}
+            }
+            if (b!=src) b.recycle();
+            if (tl==null||tr==null||br==null||bl==null) return defaultCorners(src);
+            float inv=1f/scale;
+            PointF[] p={new PointF(tl.x*inv,tl.y*inv),new PointF(tr.x*inv,tr.y*inv),new PointF(br.x*inv,br.y*inv),new PointF(bl.x*inv,bl.y*inv)};
+            return validQuad(p,src.getWidth(),src.getHeight()) ? p : defaultCorners(src);
+        } catch (Throwable ignored) {
+            return defaultCorners(src);
+        }
     }
 
     static Bitmap perspectiveCrop(Bitmap src, PointF[] p) {
@@ -196,7 +324,8 @@ final class ImageUtils {
         float limit=4096f/Math.max(ow,oh);
         if(limit<1f){ow=Math.round(ow*limit);oh=Math.round(oh*limit);}
         Bitmap out=Bitmap.createBitmap(ow,oh,Bitmap.Config.ARGB_8888);
-        Canvas c=new Canvas(out); c.drawColor(Color.WHITE);
+        Canvas c=new Canvas(out);
+        c.drawColor(Color.WHITE);
         float[] s={p[0].x,p[0].y,p[1].x,p[1].y,p[2].x,p[2].y,p[3].x,p[3].y};
         float[] d={0,0,ow,0,ow,oh,0,oh};
         Matrix m=new Matrix();
@@ -207,44 +336,97 @@ final class ImageUtils {
     }
 
     static Bitmap enhance(Bitmap input, boolean brighter, boolean sharper) {
-        Mat src = new Mat();
-        Utils.bitmapToMat(input, src);
-        Mat work = new Mat();
-        src.copyTo(work);
-
-        if (brighter) {
-            Mat rgb = new Mat();
-            Mat lab = new Mat();
-            Imgproc.cvtColor(work, rgb, Imgproc.COLOR_RGBA2RGB);
-            Imgproc.cvtColor(rgb, lab, Imgproc.COLOR_RGB2Lab);
-            List<Mat> channels = new ArrayList<>();
-            Core.split(lab, channels);
-            CLAHE clahe = Imgproc.createCLAHE(2.2, new Size(8,8));
-            Mat enhancedL = new Mat();
-            clahe.apply(channels.get(0), enhancedL);
-            channels.get(0).release();
-            channels.set(0, enhancedL);
-            Core.merge(channels, lab);
-            Imgproc.cvtColor(lab, rgb, Imgproc.COLOR_Lab2RGB);
-            Imgproc.cvtColor(rgb, work, Imgproc.COLOR_RGB2RGBA);
-            work.convertTo(work, -1, 1.08, 18);
-            for (Mat c : channels) c.release();
-            lab.release(); rgb.release();
+        if (input == null || input.isRecycled()) return input;
+        if (ensureOpenCv()) {
+            try {
+                return enhanceOpenCv(input, brighter, sharper);
+            } catch (Throwable ignored) {}
         }
-
-        if (sharper) {
-            Mat blur = new Mat();
-            Imgproc.GaussianBlur(work, blur, new Size(0,0), 1.25);
-            Core.addWeighted(work, 1.75, blur, -0.75, 0, work);
-            blur.release();
-        }
-
-        Bitmap out = Bitmap.createBitmap(input.getWidth(), input.getHeight(), Bitmap.Config.ARGB_8888);
-        Utils.matToBitmap(work, out);
-        work.release(); src.release();
-        return out;
+        return fallbackEnhance(input, brighter, sharper);
     }
 
+    private static Bitmap enhanceOpenCv(Bitmap input, boolean brighter, boolean sharper) {
+        Mat src = new Mat();
+        Mat work = new Mat();
+        try {
+            Utils.bitmapToMat(input, src);
+            src.copyTo(work);
+
+            if (brighter) {
+                Mat rgb = new Mat();
+                Mat lab = new Mat();
+                List<Mat> channels = new ArrayList<>();
+                try {
+                    Imgproc.cvtColor(work, rgb, Imgproc.COLOR_RGBA2RGB);
+                    Imgproc.cvtColor(rgb, lab, Imgproc.COLOR_RGB2Lab);
+                    Core.split(lab, channels);
+                    CLAHE clahe = Imgproc.createCLAHE(2.4, new Size(8,8));
+                    Mat enhancedL = new Mat();
+                    clahe.apply(channels.get(0), enhancedL);
+                    channels.get(0).release();
+                    channels.set(0, enhancedL);
+                    Core.merge(channels, lab);
+                    Imgproc.cvtColor(lab, rgb, Imgproc.COLOR_Lab2RGB);
+                    Imgproc.cvtColor(rgb, work, Imgproc.COLOR_RGB2RGBA);
+                    work.convertTo(work, -1, 1.10, 20);
+                } finally {
+                    for (Mat c : channels) try { c.release(); } catch (Throwable ignored) {}
+                    lab.release();
+                    rgb.release();
+                }
+            }
+
+            if (sharper) {
+                Mat blur = new Mat();
+                try {
+                    Imgproc.GaussianBlur(work, blur, new Size(0,0), 1.2);
+                    Core.addWeighted(work, 1.8, blur, -0.8, 0, work);
+                } finally {
+                    blur.release();
+                }
+            }
+
+            Bitmap out = Bitmap.createBitmap(input.getWidth(), input.getHeight(), Bitmap.Config.ARGB_8888);
+            Utils.matToBitmap(work, out);
+            return out;
+        } finally {
+            work.release();
+            src.release();
+        }
+    }
+
+    private static Bitmap fallbackEnhance(Bitmap input, boolean brighter, boolean sharper) {
+        Bitmap work = input.copy(Bitmap.Config.ARGB_8888, true);
+        int w = work.getWidth(), h = work.getHeight();
+        int[] a = new int[w*h];
+        work.getPixels(a,0,w,0,0,w,h);
+
+        if (brighter) {
+            for (int i=0;i<a.length;i++) {
+                int c=a[i];
+                int r=clamp((int)(Color.red(c)*1.12f+20));
+                int g=clamp((int)(Color.green(c)*1.12f+20));
+                int b=clamp((int)(Color.blue(c)*1.12f+20));
+                a[i]=Color.argb(Color.alpha(c),r,g,b);
+            }
+        }
+
+        if (sharper && w>2 && h>2) {
+            int[] base=a.clone();
+            for(int y=1;y<h-1;y++) for(int x=1;x<w-1;x++){
+                int i=y*w+x,c=base[i],l=base[i-1],r=base[i+1],u=base[i-w],d=base[i+w];
+                int rr=clamp(Color.red(c)*5-Color.red(l)-Color.red(r)-Color.red(u)-Color.red(d));
+                int gg=clamp(Color.green(c)*5-Color.green(l)-Color.green(r)-Color.green(u)-Color.green(d));
+                int bb=clamp(Color.blue(c)*5-Color.blue(l)-Color.blue(r)-Color.blue(u)-Color.blue(d));
+                a[i]=Color.argb(Color.alpha(c),rr,gg,bb);
+            }
+        }
+
+        work.setPixels(a,0,w,0,0,w,h);
+        return work;
+    }
+
+    private static int clamp(int v){return Math.max(0,Math.min(255,v));}
     private static double distance(Point a, Point b){return Math.hypot(a.x-b.x,a.y-b.y);}
     private static float dist(PointF a,PointF b){float dx=a.x-b.x,dy=a.y-b.y;return (float)Math.sqrt(dx*dx+dy*dy);}
     private static final class Candidate { final Point[] points; final double score; Candidate(Point[] p,double s){points=p;score=s;} }
