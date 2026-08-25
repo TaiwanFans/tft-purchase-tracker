@@ -9,9 +9,15 @@
         android:roundIcon="@drawable/ic_app_icon"
         android:label="全益採購追蹤"
         android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="false"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr_chinese" />
+
         <activity
-            android:name=".MainActivity"
+            android:name=".SafeMainActivity"
             android:screenOrientation="portrait"
             android:exported="true">
             <intent-filter>
