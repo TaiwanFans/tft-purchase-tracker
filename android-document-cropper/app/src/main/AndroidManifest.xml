@@ -4,6 +4,8 @@
     <application
         android:allowBackup="false"
         android:label="文件裁切器"
+        android:icon="@drawable/ic_pixel_document"
+        android:roundIcon="@drawable/ic_pixel_document"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
