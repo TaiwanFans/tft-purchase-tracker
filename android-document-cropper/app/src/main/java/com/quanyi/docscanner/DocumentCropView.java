@@ -19,18 +19,22 @@ public class DocumentCropView extends View {
     private final Paint imagePaint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
     private final Paint linePaint=new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint handlePaint=new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint handleBorder=new Paint(Paint.ANTI_ALIAS_FLAG);
     private int active=-1;
-    private float handleRadius;
+    private float handleSize;
 
     public DocumentCropView(Context c){
         super(c);
-        handleRadius=dp(15);
-        linePaint.setColor(Color.rgb(0,170,120));
+        handleSize=dp(18);
+        linePaint.setColor(Color.rgb(76,255,169));
         linePaint.setStyle(Paint.Style.STROKE);
         linePaint.setStrokeWidth(dp(3));
-        handlePaint.setColor(Color.WHITE);
+        handlePaint.setColor(Color.rgb(245,250,250));
         handlePaint.setStyle(Paint.Style.FILL);
-        setBackgroundColor(Color.rgb(30,30,30));
+        handleBorder.setColor(Color.rgb(76,255,169));
+        handleBorder.setStyle(Paint.Style.STROKE);
+        handleBorder.setStrokeWidth(dp(3));
+        setBackgroundColor(Color.rgb(16,24,32));
     }
 
     public void setDocument(Bitmap b,PointF[] p){bitmap=b;corners=p;invalidate();}
@@ -51,12 +55,16 @@ public class DocumentCropView extends View {
         path.close();
         c.drawPath(path,linePaint);
         for(int i=0;i<4;i++){
-            c.drawCircle(v[i*2],v[i*2+1],handleRadius+dp(3),linePaint);
-            c.drawCircle(v[i*2],v[i*2+1],handleRadius,handlePaint);
+            float x=v[i*2],y=v[i*2+1];
+            c.drawRect(x-handleSize,y-handleSize,x+handleSize,y+handleSize,handlePaint);
+            c.drawRect(x-handleSize,y-handleSize,x+handleSize,y+handleSize,handleBorder);
+            c.drawLine(x-dp(6),y,x+dp(6),y,handleBorder);
+            c.drawLine(x,y-dp(6),x,y+dp(6),handleBorder);
         }
     }
 
     private void updateMatrix(){
+        if(getWidth()==0||getHeight()==0||bitmap==null)return;
         float sx=getWidth()/(float)bitmap.getWidth();
         float sy=getHeight()/(float)bitmap.getHeight();
         float s=Math.min(sx,sy);
@@ -89,7 +97,7 @@ public class DocumentCropView extends View {
         float[] v=new float[8];
         for(int i=0;i<4;i++){v[i*2]=corners[i].x;v[i*2+1]=corners[i].y;}
         imageMatrix.mapPoints(v);
-        int idx=-1;float best=dp(72);
+        int idx=-1;float best=dp(82);
         for(int i=0;i<4;i++){
             float dx=x-v[i*2],dy=y-v[i*2+1],d=(float)Math.sqrt(dx*dx+dy*dy);
             if(d<best){best=d;idx=i;}
