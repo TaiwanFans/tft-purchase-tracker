@@ -1,6 +1,5 @@
 package com.tft.purchase;
 
-import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
@@ -27,6 +26,22 @@ import java.nio.charset.StandardCharsets;
 public class SafeMainActivity extends MainActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        /*
+         * Pixel 10 Pro XL / Android 17 (API 37) can reach MainActivity's
+         * startup window configuration before PhoneWindow has installed its
+         * DecorView. PhoneWindow.getInsetsController() then dereferences a
+         * null DecorView and crashes.
+         *
+         * Force the DecorView to be installed before MainActivity.onCreate()
+         * runs. Activity.attach() has already created the Window at this point,
+         * so this is safe and removes the API 37 startup timing race.
+         */
+        try {
+            getWindow().getDecorView();
+        } catch (Throwable ignored) {
+            // Never let cosmetic/window preparation prevent startup.
+        }
+
         try {
             super.onCreate(savedInstanceState);
         } catch (Throwable t) {
@@ -51,7 +66,7 @@ public class SafeMainActivity extends MainActivity {
 
             TextView title = label("APP 啟動發生錯誤", 24, Color.rgb(185, 28, 28), true);
             page.addView(title);
-            page.addView(label("這個版本已阻止 APP 直接閃退。請把下方錯誤資訊截圖給我，我可以直接定位修正。", 15, Color.rgb(51, 65, 85), false));
+            page.addView(label("這個版本已阻止 APP 直接閃退。請把下方錯誤資訊截圖或複製給我，我可以繼續直接定位修正。", 15, Color.rgb(51, 65, 85), false));
 
             TextView info = label(details, 12, Color.rgb(15, 23, 42), false);
             info.setTextIsSelectable(true);
@@ -82,7 +97,6 @@ public class SafeMainActivity extends MainActivity {
             scroll.addView(page);
             setContentView(scroll);
         } catch (Throwable fatalUiError) {
-            // Last-resort minimal UI if even the diagnostic layout fails.
             TextView v = new TextView(this);
             v.setText("全益採購追蹤啟動失敗\n" + error.getClass().getName() + "\n" + String.valueOf(error.getMessage()));
             v.setTextSize(16);
@@ -100,7 +114,7 @@ public class SafeMainActivity extends MainActivity {
 
     private String buildDetails(Throwable t) {
         StringBuilder s = new StringBuilder();
-        s.append("版本：2.0.1\n");
+        s.append("版本：2.0.2\n");
         s.append("Android：").append(Build.VERSION.RELEASE).append(" / API ").append(Build.VERSION.SDK_INT).append("\n");
         s.append("裝置：").append(Build.MANUFACTURER).append(' ').append(Build.MODEL).append("\n\n");
         Throwable cur = t;
