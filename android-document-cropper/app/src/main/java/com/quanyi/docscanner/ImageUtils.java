@@ -13,11 +13,13 @@ import android.net.Uri;
 
 import org.opencv.android.Utils;
 import org.opencv.core.Core;
+import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfPoint;
 import org.opencv.core.MatOfPoint2f;
 import org.opencv.core.Point;
 import org.opencv.core.Rect;
+import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 import org.opencv.imgproc.CLAHE;
 import org.opencv.imgproc.Imgproc;
@@ -36,7 +38,7 @@ final class ImageUtils {
         if (opencvReady != null) return opencvReady;
         synchronized (ImageUtils.class) {
             if (opencvReady != null) return opencvReady;
-            boolean ok = false;
+            boolean ok;
             try {
                 System.loadLibrary("opencv_java4");
                 ok = true;
@@ -147,9 +149,7 @@ final class ImageUtils {
         } catch (Throwable ignored) {
             return fallbackDetectDocumentCorners(src);
         } finally {
-            for (Mat m : maps) {
-                try { m.release(); } catch (Throwable ignored) {}
-            }
+            for (Mat m : maps) try { m.release(); } catch (Throwable ignored) {}
             try { gray.release(); } catch (Throwable ignored) {}
             try { rgba.release(); } catch (Throwable ignored) {}
             if (detectBitmap != null && detectBitmap != src && !detectBitmap.isRecycled()) detectBitmap.recycle();
@@ -164,7 +164,6 @@ final class ImageUtils {
             Imgproc.findContours(copy, contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE);
             Candidate best = null;
             double imageArea = w * (double)h;
-
             for (MatOfPoint contour : contours) {
                 try {
                     double area = Math.abs(Imgproc.contourArea(contour));
@@ -201,16 +200,13 @@ final class ImageUtils {
         } finally {
             copy.release();
             hierarchy.release();
-            for (MatOfPoint c : contours) {
-                try { c.release(); } catch (Throwable ignored) {}
-            }
+            for (MatOfPoint c : contours) try { c.release(); } catch (Throwable ignored) {}
         }
     }
 
     private static double quadScore(Point[] p, double area, double imageArea, int w, int h) {
         double minSide = Math.min(Math.min(distance(p[0],p[1]), distance(p[1],p[2])), Math.min(distance(p[2],p[3]), distance(p[3],p[0])));
         if (minSide < Math.min(w,h)*0.12) return -1;
-
         double anglePenalty = 0;
         for (int i=0;i<4;i++) {
             Point prev = p[(i+3)%4], cur = p[i], next = p[(i+1)%4];
@@ -220,7 +216,6 @@ final class ImageUtils {
         }
         anglePenalty /= 4.0;
         if (anglePenalty > 0.72) return -1;
-
         MatOfPoint temp = new MatOfPoint(p);
         Rect r;
         try { r = Imgproc.boundingRect(temp); }
@@ -294,7 +289,6 @@ final class ImageUtils {
             }
             Collections.sort(mags);
             int threshold = Math.max(80, mags.get((int)(mags.size()*0.90f)));
-
             float minSum=Float.MAX_VALUE, maxSum=-Float.MAX_VALUE, minDiff=Float.MAX_VALUE, maxDiff=-Float.MAX_VALUE;
             PointF tl=null,tr=null,br=null,bl=null;
             int marginX=Math.max(2,(int)(w*.02f)), marginY=Math.max(2,(int)(h*.02f));
@@ -347,50 +341,61 @@ final class ImageUtils {
 
     private static Bitmap enhanceOpenCv(Bitmap input, boolean brighter, boolean sharper) {
         Mat src = new Mat();
-        Mat work = new Mat();
+        Mat rgb = new Mat();
         try {
             Utils.bitmapToMat(input, src);
-            src.copyTo(work);
+            Imgproc.cvtColor(src, rgb, Imgproc.COLOR_RGBA2RGB);
 
             if (brighter) {
-                Mat rgb = new Mat();
+                Mat background = new Mat();
+                Mat normalized = new Mat();
                 Mat lab = new Mat();
                 List<Mat> channels = new ArrayList<>();
                 try {
-                    Imgproc.cvtColor(work, rgb, Imgproc.COLOR_RGBA2RGB);
+                    double sigma = Math.max(10.0, Math.max(input.getWidth(), input.getHeight()) / 28.0);
+                    Imgproc.GaussianBlur(rgb, background, new Size(0,0), sigma);
+                    Core.add(background, Scalar.all(1.0), background);
+                    Core.divide(rgb, background, normalized, 245.0);
+                    normalized.convertTo(rgb, -1, 1.28, -50.0);
+
                     Imgproc.cvtColor(rgb, lab, Imgproc.COLOR_RGB2Lab);
                     Core.split(lab, channels);
-                    CLAHE clahe = Imgproc.createCLAHE(2.4, new Size(8,8));
+                    CLAHE clahe = Imgproc.createCLAHE(2.0, new Size(8,8));
                     Mat enhancedL = new Mat();
                     clahe.apply(channels.get(0), enhancedL);
                     channels.get(0).release();
                     channels.set(0, enhancedL);
                     Core.merge(channels, lab);
                     Imgproc.cvtColor(lab, rgb, Imgproc.COLOR_Lab2RGB);
-                    Imgproc.cvtColor(rgb, work, Imgproc.COLOR_RGB2RGBA);
-                    work.convertTo(work, -1, 1.10, 20);
                 } finally {
                     for (Mat c : channels) try { c.release(); } catch (Throwable ignored) {}
-                    lab.release();
-                    rgb.release();
+                    try { lab.release(); } catch (Throwable ignored) {}
+                    try { normalized.release(); } catch (Throwable ignored) {}
+                    try { background.release(); } catch (Throwable ignored) {}
                 }
             }
 
             if (sharper) {
                 Mat blur = new Mat();
                 try {
-                    Imgproc.GaussianBlur(work, blur, new Size(0,0), 1.2);
-                    Core.addWeighted(work, 1.8, blur, -0.8, 0, work);
+                    Imgproc.GaussianBlur(rgb, blur, new Size(0,0), 0.9);
+                    Core.addWeighted(rgb, 1.55, blur, -0.55, 0, rgb);
                 } finally {
                     blur.release();
                 }
             }
 
-            Bitmap out = Bitmap.createBitmap(input.getWidth(), input.getHeight(), Bitmap.Config.ARGB_8888);
-            Utils.matToBitmap(work, out);
-            return out;
+            Mat outRgba = new Mat();
+            try {
+                Imgproc.cvtColor(rgb, outRgba, Imgproc.COLOR_RGB2RGBA);
+                Bitmap out = Bitmap.createBitmap(input.getWidth(), input.getHeight(), Bitmap.Config.ARGB_8888);
+                Utils.matToBitmap(outRgba, out);
+                return out;
+            } finally {
+                outRgba.release();
+            }
         } finally {
-            work.release();
+            rgb.release();
             src.release();
         }
     }
@@ -404,9 +409,9 @@ final class ImageUtils {
         if (brighter) {
             for (int i=0;i<a.length;i++) {
                 int c=a[i];
-                int r=clamp((int)(Color.red(c)*1.12f+20));
-                int g=clamp((int)(Color.green(c)*1.12f+20));
-                int b=clamp((int)(Color.blue(c)*1.12f+20));
+                int r=clamp((int)(Color.red(c)*1.28f-45));
+                int g=clamp((int)(Color.green(c)*1.28f-45));
+                int b=clamp((int)(Color.blue(c)*1.28f-45));
                 a[i]=Color.argb(Color.alpha(c),r,g,b);
             }
         }
@@ -415,9 +420,9 @@ final class ImageUtils {
             int[] base=a.clone();
             for(int y=1;y<h-1;y++) for(int x=1;x<w-1;x++){
                 int i=y*w+x,c=base[i],l=base[i-1],r=base[i+1],u=base[i-w],d=base[i+w];
-                int rr=clamp(Color.red(c)*5-Color.red(l)-Color.red(r)-Color.red(u)-Color.red(d));
-                int gg=clamp(Color.green(c)*5-Color.green(l)-Color.green(r)-Color.green(u)-Color.green(d));
-                int bb=clamp(Color.blue(c)*5-Color.blue(l)-Color.blue(r)-Color.blue(u)-Color.blue(d));
+                int rr=clamp((Color.red(c)*6-Color.red(l)-Color.red(r)-Color.red(u)-Color.red(d))/2);
+                int gg=clamp((Color.green(c)*6-Color.green(l)-Color.green(r)-Color.green(u)-Color.green(d))/2);
+                int bb=clamp((Color.blue(c)*6-Color.blue(l)-Color.blue(r)-Color.blue(u)-Color.blue(d))/2);
                 a[i]=Color.argb(Color.alpha(c),rr,gg,bb);
             }
         }
