@@ -14,8 +14,23 @@ android {
         versionName '2.0.3'
     }
 
+    // Stable internal signing key: after installing v2.0.3 once, later APKs can
+    // update in place instead of forcing an uninstall and wiping local data.
+    signingConfigs {
+        internalDebug {
+            storeFile file('tft-debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.internalDebug
+        }
         release {
+            signingConfig signingConfigs.internalDebug
             minifyEnabled false
         }
     }
@@ -27,8 +42,6 @@ android {
 }
 
 dependencies {
-    // Bundle Chinese OCR so recognition works immediately/offline after install.
     implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
-    // Persistent background reminder/backup work that survives process death and reboot.
     implementation 'androidx.work:work-runtime:2.10.1'
 }
