@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId 'com.tft.purchase'
-        minSdk 23
+        minSdk 24
         targetSdk 35
         versionCode 7
         versionName '2.0.5'
