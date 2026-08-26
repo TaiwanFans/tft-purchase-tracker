@@ -10,8 +10,8 @@ android {
         applicationId 'com.tft.purchase'
         minSdk 23
         targetSdk 35
-        versionCode 4
-        versionName '2.0.2'
+        versionCode 5
+        versionName '2.0.3'
     }
 
     buildTypes {
@@ -27,8 +27,8 @@ android {
 }
 
 dependencies {
-    // Use the Google Play services delivery of the Chinese OCR model instead of
-    // bundling the native OCR runtime inside the APK. This keeps startup safer
-    // across newer Pixel / Android memory-page configurations and reduces APK size.
-    implementation 'com.google.android.gms:play-services-mlkit-text-recognition-chinese:16.0.1'
+    // Bundle Chinese OCR so recognition works immediately/offline after install.
+    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
+    // Persistent background reminder/backup work that survives process death and reboot.
+    implementation 'androidx.work:work-runtime:2.10.1'
 }
