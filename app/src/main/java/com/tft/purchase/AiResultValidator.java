@@ -8,7 +8,7 @@ import java.util.Locale;
 
 /**
  * Deterministic guardrail after Gemma vision.
- * The AI is allowed to fill fields, but unsupported/inconsistent data is never silently saved.
+ * V2.0.8 sanitizes hallucinations but keeps useful partial rows so the user always gets a visible AI result.
  */
 public final class AiResultValidator {
     private AiResultValidator() {}
@@ -29,7 +29,6 @@ public final class AiResultValidator {
         if (!p.orderNo.matches("20\\d{10}")) v.problems.add("採購單號不是 12 碼");
         if (p.purchaseDate.isEmpty()) v.problems.add("採購日期無法確認");
 
-        // In the user's purchase-order template, order number starts with YYYYMMDD and then 4 sequence digits.
         if (p.orderNo.matches("20\\d{10}") && !p.purchaseDate.isEmpty()) {
             String prefix = p.purchaseDate.replace("-", "");
             if (!p.orderNo.startsWith(prefix)) v.problems.add("採購單號日期前綴與採購日期不一致");
@@ -37,7 +36,9 @@ public final class AiResultValidator {
 
         List<PurchaseDbHelper.PurchaseItem> kept = new ArrayList<>();
         if (p.items != null) {
+            int rowIndex = 0;
             for (PurchaseDbHelper.PurchaseItem i : p.items) {
+                rowIndex++;
                 if (i == null) continue;
                 i.lineNo = normalizeLine(i.lineNo);
                 i.description = clean(i.description);
@@ -48,50 +49,61 @@ public final class AiResultValidator {
                 i.deliveryDate = date(i.deliveryDate);
                 i.note = clean(i.note);
 
+                // Hard filters: these are definitely not purchase items.
                 if (i.description.isEmpty()) continue;
                 if (containsFooterText(i.description)) continue;
-                if (!i.lineNo.matches("\\d{3}")) continue;
-                Double q = number(i.quantity);
-                if (q == null || q <= 0) continue;
-                if (i.deliveryDate.isEmpty()) continue;
 
-                // A delivery date far before the purchase date is almost certainly a column hallucination.
-                if (!p.purchaseDate.isEmpty()) {
+                // Keep a plausible table row even when one required field is uncertain.
+                // This lets the user see the AI result and re-run AI instead of losing the whole document.
+                boolean hasRowEvidence = !i.quantity.isEmpty() || !i.unit.isEmpty() ||
+                        !i.unitPrice.isEmpty() || !i.subtotal.isEmpty() || !i.deliveryDate.isEmpty();
+                if (!hasRowEvidence) continue;
+
+                if (i.lineNo.isEmpty()) v.problems.add("第 " + rowIndex + " 個品項項次不確定");
+                Double q = number(i.quantity);
+                if (q == null || q <= 0) v.problems.add("品項 " + rowName(i, rowIndex) + " 數量不確定");
+                if (i.deliveryDate.isEmpty()) v.problems.add("品項 " + rowName(i, rowIndex) + " 交貨日期不確定");
+
+                if (!p.purchaseDate.isEmpty() && !i.deliveryDate.isEmpty()) {
                     long diff = dayDiff(p.purchaseDate, i.deliveryDate);
-                    if (diff < -1) continue;
+                    if (diff < -1) {
+                        // Do not trust a delivery date before the purchase date; blank it, but keep the row.
+                        i.deliveryDate = "";
+                        v.problems.add("品項 " + rowName(i, rowIndex) + " 交貨日期疑似錯誤");
+                    }
                 }
 
-                // If price arithmetic conflicts, keep the important item/quantity/date but blank the doubtful money fields.
+                // Money is secondary. If arithmetic disagrees, blank money rather than deleting the item.
                 Double price = number(i.unitPrice);
                 Double subtotal = number(i.subtotal);
-                if (price != null && subtotal != null) {
+                if (q != null && q > 0 && price != null && subtotal != null) {
                     double expected = q * price;
                     double tolerance = Math.max(2.0, Math.abs(expected) * 0.015);
                     if (Math.abs(expected - subtotal) > tolerance) {
                         i.unitPrice = "";
                         i.subtotal = "";
+                        v.problems.add("品項 " + rowName(i, rowIndex) + " 金額欄位不一致");
                     }
                 }
                 kept.add(i);
             }
         }
-        p.items.clear();
-        p.items.addAll(kept);
-
-        if (p.items.isEmpty()) {
-            v.problems.add("沒有找到可靠的正式採購品項");
-        } else {
-            int strong = 0;
-            for (PurchaseDbHelper.PurchaseItem i : p.items) {
-                if (!i.quantity.isEmpty() && !i.deliveryDate.isEmpty() && !i.description.isEmpty()) strong++;
-            }
-            if (strong != p.items.size()) v.problems.add("部分品項的數量或交貨日期不完整");
+        if (p.items != null) {
+            p.items.clear();
+            p.items.addAll(kept);
         }
 
+        if (kept.isEmpty()) v.problems.add("沒有找到可靠的正式採購品項");
+
         v.reliable = v.problems.isEmpty();
+        v.hasUsefulData = !p.vendor.isEmpty() || !p.orderNo.isEmpty() || !p.purchaseDate.isEmpty() || !kept.isEmpty();
         if (v.reliable) v.message = "AI 資料已通過一致性檢查";
         else v.message = join(v.problems);
         return v;
+    }
+
+    private static String rowName(PurchaseDbHelper.PurchaseItem i, int index) {
+        return i.lineNo == null || i.lineNo.isEmpty() ? String.valueOf(index) : i.lineNo;
     }
 
     private static String normalizeLine(String s) {
@@ -107,9 +119,10 @@ public final class AiResultValidator {
     private static boolean containsFooterText(String s) {
         String x = s.replaceAll("\\s+", "");
         String[] bad = {
-                "以下空白","本頁小計","稅額","總計","出貨時請標註","出貨時請標柱",
+                "以下空白","本頁小計","頁小計","稅額","總計","合計","出貨時請標註","出貨時請標柱",
                 "公司機密","禁止外洩","禁止外泄","24小時內回傳","收到本採購單後",
-                "如內容文字及交期","無誤後蓋章","如發生糾紛","地方法院","審核","經辦人","廠商確認","FAXED"
+                "如內容文字及交期","無誤後蓋章","如發生糾紛","地方法院","審核","主管","經辦人","廠商確認",
+                "FAXED","傳真","回傳04-823-5682"
         };
         for (String b : bad) if (x.contains(b)) return true;
         return false;
@@ -164,6 +177,7 @@ public final class AiResultValidator {
 
     public static class Validation {
         public boolean reliable;
+        public boolean hasUsefulData;
         public String message = "";
         public final List<String> problems = new ArrayList<>();
     }
