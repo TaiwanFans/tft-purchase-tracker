@@ -33,6 +33,7 @@ public final class AiJobStore {
                 .putInt("current", 0)
                 .putInt("success", 0)
                 .putInt("failed", 0)
+                .putInt("warning_count", 0)
                 .putString("paths", a.toString())
                 .putLong("replace_id", replaceId)
                 .putString("last_ids", "")
@@ -59,13 +60,19 @@ public final class AiJobStore {
         s.edit().putString("last_ids", next).apply();
     }
 
-    public static void done(Context c, int success, int failed) {
+    public static void done(Context c, int created, int warnings) {
+        String stage;
+        if (created <= 0) stage = "AI 分析結束，但沒有建立採購單";
+        else if (warnings > 0) stage = "已建立 " + created + " 張採購單，其中 " + warnings + " 張建議重新 AI 分析";
+        else stage = "已建立 " + created + " 張採購單，後續功能已可使用";
         p(c).edit()
-                .putString("state", failed > 0 && success == 0 ? STATE_ERROR : STATE_DONE)
+                .putString("state", created > 0 ? STATE_DONE : STATE_ERROR)
                 .putInt("progress", 100)
-                .putString("stage", failed > 0 ? "AI 分析完成，有 " + failed + " 張未通過可靠度檢查" : "AI 分析完成")
-                .putInt("success", success)
-                .putInt("failed", failed)
+                .putString("stage", stage)
+                .putInt("success", Math.max(0, created))
+                .putInt("failed", 0)
+                .putInt("warning_count", Math.max(0, warnings))
+                .putString("error", created > 0 ? "" : "AI 沒有建立任何採購單")
                 .apply();
     }
 
@@ -88,6 +95,7 @@ public final class AiJobStore {
         x.current = s.getInt("current", 0);
         x.success = s.getInt("success", 0);
         x.failed = s.getInt("failed", 0);
+        x.warningCount = s.getInt("warning_count", 0);
         x.error = s.getString("error", "");
         x.replaceId = s.getLong("replace_id", -1);
         x.paths = readPaths(s.getString("paths", "[]"));
@@ -124,6 +132,7 @@ public final class AiJobStore {
         public int current;
         public int success;
         public int failed;
+        public int warningCount;
         public String error = "";
         public long replaceId = -1;
         public List<String> paths = new ArrayList<>();
