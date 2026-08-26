@@ -10,12 +10,11 @@ android {
         applicationId 'com.tft.purchase'
         minSdk 23
         targetSdk 35
-        versionCode 5
-        versionName '2.0.3'
+        versionCode 6
+        versionName '2.0.4'
     }
 
-    // Stable internal signing key: after installing v2.0.3 once, later APKs can
-    // update in place instead of forcing an uninstall and wiping local data.
+    // Stable internal signing key: later APKs can update in place.
     signingConfigs {
         internalDebug {
             storeFile file('tft-debug.keystore')
