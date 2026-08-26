@@ -102,6 +102,7 @@ public class AiMainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         handler.post(pollJob);
+        if (screen == DETAIL && detailId > 0) handler.post(() -> showDetail(detailId));
     }
 
     @Override protected void onPause() {
@@ -230,7 +231,7 @@ public class AiMainActivity extends Activity {
         LinearLayout page = page(); page.addView(topBar("設定", this::showHome));
         page.addView(section("AI 辨識"));
         page.addView(info(GemmaBridge.isReady(this) ? "Gemma AI 已就緒 ✓" : "Gemma AI 尚未就緒",
-                "V2.0.7 使用三階段視覺辨識：表頭 → 品項表格 → 整張稽核。OCR 不再直接填寫欄位。只有通過一致性檢查的資料才會自動寫入。"));
+                "V2.0.9 使用 Gemma 4 E4B，先放大切分供應商區、單號日期區與品項表格，再做上半頁交叉驗證。AI 欄位可人工修正。"));
         if (!GemmaBridge.isReady(this)) {
             Button model = action("前往安裝 Gemma 模型", BLUE); model.setOnClickListener(v -> startActivity(new Intent(this, GemmaSetupActivity.class))); page.addView(model, margins(5,10));
         }
@@ -254,7 +255,7 @@ public class AiMainActivity extends Activity {
         Button choose = action(tree.isEmpty()?"選擇 Google Drive 備份資料夾":"更換 Google Drive 備份資料夾",BLUE); choose.setOnClickListener(v -> chooseBackupFolder()); page.addView(choose,margins(5,6));
         Button backup = action("立即備份",GREEN); backup.setEnabled(!tree.isEmpty()); backup.setOnClickListener(v -> backupNow()); page.addView(backup,margins(4,6));
         Button restore = action("從備份 ZIP 還原",Color.rgb(124,58,237)); restore.setOnClickListener(v -> chooseRestore()); page.addView(restore,margins(4,10));
-        page.addView(info("版本 2.0.7","Pixel 10 Pro XL / Android 17 優先；AI 分析可在背景持續執行。"));
+        page.addView(info("版本 2.0.9","Pixel 10 Pro XL / Android 17 優先；Gemma 4 E4B 完全在手機本機執行，不使用付費 API。"));
         setScreen(page, SETTINGS);
     }
 
@@ -282,7 +283,14 @@ public class AiMainActivity extends Activity {
         PurchaseDbHelper.Purchase p = db.get(id); if (p == null) { showPurchases(); return; }
         detailId = id; screen = DETAIL; itemCompletionRows.clear();
         LinearLayout page = page(); page.addView(topBar("採購單明細", this::showPurchases));
-        page.addView(info("AI 自動填寫欄位", "下方採購資料由 Gemma 直接讀圖片產生，不需要你逐欄輸入。若內容不對，請按「重新 AI 分析」，不要手動改 AI 欄位。"));
+        page.addView(info("AI 自動填寫，可人工修正", "Gemma 會先填入採購資料；如果 AI 判錯，請直接按下方『修改 AI 辨識結果』修正，不需要重新從零輸入。"));
+        Button editAi = action("✎ 修改 AI 辨識結果", BLUE);
+        editAi.setOnClickListener(v -> {
+            Intent edit = new Intent(this, PurchaseEditActivity.class);
+            edit.putExtra("purchase_id", p.id);
+            startActivity(edit);
+        });
+        page.addView(editAi, margins(6,8));
         if (!empty(p.imagePath) && new File(p.imagePath).exists()) {
             ImageView img = new ImageView(this); img.setAdjustViewBounds(true); img.setScaleType(ImageView.ScaleType.FIT_CENTER); img.setImageBitmap(previewBitmap(p.imagePath)); img.setBackground(box(Color.WHITE,Color.rgb(148,163,184),1)); page.addView(img,marginsRaw(-1,dp(300),6,10));
         }
@@ -398,7 +406,7 @@ public class AiMainActivity extends Activity {
     private String earliest(List<PurchaseDbHelper.PurchaseItem>xs){String e="";for(PurchaseDbHelper.PurchaseItem i:xs)if(!empty(i.deliveryDate)&&(e.isEmpty()||i.deliveryDate.compareTo(e)<0))e=i.deliveryDate;return e;}
     private String normalizeDate(String s){if(empty(s))return"";String d=PurchaseOcrParser.extractDate(s);return empty(d)?s.trim():d;}
 
-    private View header(){LinearLayout c=card(Color.rgb(219,234,254),BLUE);LinearLayout r=row();ImageView icon=new ImageView(this);icon.setImageResource(R.drawable.ic_app_icon);r.addView(icon,new LinearLayout.LayoutParams(dp(64),dp(64)));LinearLayout t=new LinearLayout(this);t.setOrientation(LinearLayout.VERTICAL);t.setPadding(dp(12),0,0,0);t.addView(txt("全益採購追蹤",25,NAVY,true));t.addView(txt("GEMMA AI 自動填寫｜背景分析｜交貨提醒",13,GRAY,true));r.addView(t,weight());c.addView(r);return c;}
+    private View header(){LinearLayout c=card(Color.rgb(219,234,254),BLUE);LinearLayout r=row();ImageView icon=new ImageView(this);icon.setImageResource(R.drawable.ic_app_icon);r.addView(icon,new LinearLayout.LayoutParams(dp(64),dp(64)));LinearLayout t=new LinearLayout(this);t.setOrientation(LinearLayout.VERTICAL);t.setPadding(dp(12),0,0,0);t.addView(txt("全益採購追蹤",25,NAVY,true));t.addView(txt("GEMMA 4 E4B｜可人工修正｜交貨提醒",13,GRAY,true));r.addView(t,weight());c.addView(r);return c;}
     private View jobCard(AiJobStore.Snapshot s){LinearLayout c=card(Color.WHITE,CYAN);c.addView(txt("Gemma AI 正在背景分析",17,NAVY,true));ProgressBar p=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);p.setMax(100);p.setProgress(s.progress);c.addView(p,marginsRaw(-1,dp(18),7,6));c.addView(txt(s.stage+"　"+s.progress+"%",14,GRAY,false));c.setOnClickListener(v->showAnalysis());return c;}
     private View lastJobCard(AiJobStore.Snapshot s){String title=AiJobStore.STATE_DONE.equals(s.state)?"上次 AI 分析完成":"上次 AI 分析需處理";LinearLayout c=card(Color.WHITE,s.failed>0?AMBER:GREEN);c.addView(txt(title,16,NAVY,true));c.addView(txt("成功 "+s.success+" 張｜未通過 "+s.failed+" 張",14,GRAY,false));c.setOnClickListener(v->showAnalysis());return c;}
     private View status(String label,int count,int color){LinearLayout c=card(color,Color.rgb(15,23,42));c.addView(txt(label,14,Color.WHITE,true));c.addView(txt(String.valueOf(count),30,Color.WHITE,true));c.setOnClickListener(v->showReminders());return c;}
