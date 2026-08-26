@@ -3,6 +3,8 @@ package com.tft.purchase
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.os.Handler
 import android.os.Looper
 import com.google.ai.edge.litertlm.Backend
@@ -13,14 +15,16 @@ import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.LogSeverity
 import com.google.ai.edge.litertlm.SamplerConfig
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.max
 
 /**
- * V2.0.9 on-device Gemma 4 E4B document recognizer.
- * The fixed purchase-order layout is split into dedicated visual regions so tiny A4 text
- * is not crushed into one full-page vision input. OCR never writes fields directly.
+ * V2.0.10 on-device Gemma 4 E4B document recognizer.
+ * Fixes EXIF orientation before cropping and never discards useful results from the focused passes
+ * just because the final verification pass returns empty/invalid JSON.
  */
 object GemmaBridge {
     private val lock = Any()
@@ -47,8 +51,10 @@ object GemmaBridge {
         Thread {
             try {
                 val model = GemmaModelManager.modelFile(app)
-                if (!GemmaModelManager.isReady(app)) throw IllegalStateException("Gemma 4 E4B 模型尚未安裝完成")
-                notifyProgress(progress, 4, "準備高解析採購單區域")
+                if (!GemmaModelManager.isReady(app)) {
+                    throw IllegalStateException("Gemma 4 E4B 尚未完整下載並驗證；請先到模型安裝頁完成下載")
+                }
+                notifyProgress(progress, 4, "校正照片方向並準備高解析區域")
                 val e = obtainEngine(app, model)
                 val response = runAdvanced(e, app, imagePath, progress)
                 main.post { callback.onSuccess(response) }
@@ -61,19 +67,23 @@ object GemmaBridge {
                     }
                     notifyProgress(progress, 7, "GPU 無法使用，切換 CPU AI")
                     val model = GemmaModelManager.modelFile(app)
+                    if (!GemmaModelManager.isReady(app)) {
+                        throw IllegalStateException("Gemma 4 E4B 模型未通過完整性驗證")
+                    }
                     val cpuConfig = EngineConfig(
                         modelPath = model.absolutePath,
                         backend = Backend.CPU(threadCount = 4),
                         visionBackend = Backend.CPU(threadCount = 4),
                         maxNumImages = 1,
-                        cacheDir = File(app.cacheDir, "gemma_e4b_cpu").apply { mkdirs() }.absolutePath
+                        cacheDir = File(app.cacheDir, "gemma_e4b_cpu_v210").apply { mkdirs() }.absolutePath
                     )
                     val cpu = Engine(cpuConfig)
                     cpu.initialize()
                     val response = cpu.use { runAdvanced(it, app, imagePath, progress) }
                     main.post { callback.onSuccess(response) }
                 } catch (cpuError: Throwable) {
-                    val msg = "Gemma 4 E4B 分析失敗：" + (cpuError.message ?: gpuError.message ?: cpuError.javaClass.simpleName)
+                    val msg = "Gemma 4 E4B 分析失敗：" +
+                        (cpuError.message ?: gpuError.message ?: cpuError.javaClass.simpleName)
                     main.post { callback.onFailure(msg) }
                 }
             }
@@ -115,8 +125,11 @@ object GemmaBridge {
                 2000
             )
 
+            // Deterministically preserve the focused-pass data before asking the model to verify.
+            val focused = mergeFocusedPasses(vendor, order, table)
+
             notifyProgress(progress, 75, "AI 用上半頁交叉核對")
-            val candidate = "VENDOR_CANDIDATE:\n${clip(vendor, 5000)}\n\nORDER_CANDIDATE:\n${clip(order, 4000)}\n\nTABLE_CANDIDATE:\n${clip(table, 13000)}"
+            val candidate = "FOCUSED_CANDIDATE:\n${focused.toString()}"
             val finalResponse = send(
                 e,
                 prepared.verify.absolutePath,
@@ -125,7 +138,11 @@ object GemmaBridge {
                 2400
             )
             notifyProgress(progress, 93, "程式檢查單號、日期與金額一致性")
-            return finalResponse
+
+            // A final verifier occasionally emits empty/invalid JSON. Do not throw away the three
+            // useful high-resolution passes in that case.
+            val verified = extractJson(finalResponse)
+            return if (verified != null && hasUsefulData(verified)) verified.toString() else focused.toString()
         } finally {
             prepared.cleanup()
         }
@@ -145,6 +162,35 @@ object GemmaBridge {
                 )
             ).toString()
         }
+    }
+
+    private fun mergeFocusedPasses(vendorRaw: String, orderRaw: String, tableRaw: String): JSONObject {
+        val vendor = extractJson(vendorRaw)
+        val order = extractJson(orderRaw)
+        val table = extractJson(tableRaw)
+        val out = JSONObject()
+        out.put("vendor", vendor?.optString("vendor", "") ?: "")
+        out.put("location", vendor?.optString("location", "") ?: "")
+        out.put("order_no", order?.optString("order_no", "") ?: "")
+        out.put("purchase_date", order?.optString("purchase_date", "") ?: "")
+        val items = table?.optJSONArray("items") ?: JSONArray()
+        out.put("items", items)
+        return out
+    }
+
+    private fun extractJson(raw: String?): JSONObject? {
+        if (raw.isNullOrBlank()) return null
+        val a = raw.indexOf('{')
+        val b = raw.lastIndexOf('}')
+        if (a < 0 || b <= a) return null
+        return try { JSONObject(raw.substring(a, b + 1)) } catch (_: Throwable) { null }
+    }
+
+    private fun hasUsefulData(o: JSONObject): Boolean {
+        if (o.optString("vendor", "").isNotBlank()) return true
+        if (o.optString("order_no", "").isNotBlank()) return true
+        if (o.optString("purchase_date", "").isNotBlank()) return true
+        return (o.optJSONArray("items")?.length() ?: 0) > 0
     }
 
     private fun vendorPrompt(): String = """
@@ -190,7 +236,7 @@ object GemmaBridge {
 """.trimIndent()
 
     private fun verifyPrompt(candidate: String): String = """
-這張圖片只保留採購單上半頁的重要區域。以下是三個放大區域得到的候選資料；候選可能有錯，請重新對照圖片。
+這張圖片保留採購單的重要區域。以下是三個放大區域得到的候選資料；候選可能有錯，請重新對照圖片。
 
 $candidate
 
@@ -223,7 +269,7 @@ $candidate
             if (existing != null && existing.isInitialized() && engineModelPath == model.absolutePath) return existing
             try { existing?.close() } catch (_: Throwable) {}
             Engine.setNativeMinLogSeverity(LogSeverity.ERROR)
-            val cache = File(context.cacheDir, "gemma_e4b_gpu").apply { mkdirs() }
+            val cache = File(context.cacheDir, "gemma_e4b_gpu_v210").apply { mkdirs() }
             val config = EngineConfig(
                 modelPath = model.absolutePath,
                 backend = Backend.GPU(),
@@ -253,53 +299,91 @@ $candidate
         BitmapFactory.decodeFile(imagePath, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IllegalArgumentException("無法解碼採購單圖片")
         var sample = 1
-        while (bounds.outWidth / sample > 3600 || bounds.outHeight / sample > 4600) sample *= 2
+        while (bounds.outWidth / sample > 4000 || bounds.outHeight / sample > 5000) sample *= 2
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         var bm = BitmapFactory.decodeFile(imagePath, opts) ?: throw IllegalArgumentException("無法載入採購單圖片")
+
+        // Pixel/Google Photos often stores camera pixels rotated and relies on EXIF orientation.
+        // BitmapFactory does NOT apply that metadata, so crop coordinates were previously wrong.
+        bm = applyExifOrientation(bm, imagePath)
+
+        // This company's purchase order is portrait A4. If metadata is absent but pixels are still
+        // landscape, normalize to portrait before applying fixed-layout crops.
+        if (bm.width > bm.height) bm = rotateBitmap(bm, 90f)
+
         val maxSide = max(bm.width, bm.height)
-        if (maxSide > 3600) {
-            val scale = 3600f / maxSide.toFloat()
-            val scaled = Bitmap.createScaledBitmap(bm, max(1, (bm.width * scale).toInt()), max(1, (bm.height * scale).toInt()), true)
+        if (maxSide > 4000) {
+            val scale = 4000f / maxSide.toFloat()
+            val scaled = Bitmap.createScaledBitmap(
+                bm,
+                max(1, (bm.width * scale).toInt()),
+                max(1, (bm.height * scale).toInt()),
+                true
+            )
             if (scaled !== bm) bm.recycle()
             bm = scaled
         }
 
-        val dir = File(context.cacheDir, "gemma_doc_parts_v209").apply { mkdirs() }
+        val dir = File(context.cacheDir, "gemma_doc_parts_v210").apply { mkdirs() }
         val tag = System.nanoTime().toString()
         val vendorFile = File(dir, "vendor_$tag.jpg")
         val orderFile = File(dir, "order_$tag.jpg")
         val tableFile = File(dir, "table_$tag.jpg")
         val verifyFile = File(dir, "verify_$tag.jpg")
 
-        // Left header: supplier and address. Crop aggressively so Chinese characters remain large.
-        val vendorX = 0
-        val vendorY = (bm.height * 0.045f).toInt().coerceAtLeast(0)
-        val vendorW = (bm.width * 0.72f).toInt().coerceAtMost(bm.width)
-        val vendorBottom = (bm.height * 0.285f).toInt().coerceAtMost(bm.height)
-        val vendorBm = Bitmap.createBitmap(bm, vendorX, vendorY, vendorW, max(1, vendorBottom - vendorY))
-        saveJpeg(vendorBm, vendorFile); vendorBm.recycle()
+        // Left header: supplier and address. Keep a little more margin to tolerate hand-held framing.
+        val vendorY = (bm.height * 0.025f).toInt().coerceAtLeast(0)
+        val vendorW = (bm.width * 0.74f).toInt().coerceAtMost(bm.width)
+        val vendorBottom = (bm.height * 0.31f).toInt().coerceAtMost(bm.height)
+        val vendorBm = Bitmap.createBitmap(bm, 0, vendorY, vendorW, max(1, vendorBottom - vendorY))
+        saveJpeg(vendorBm, vendorFile)
+        vendorBm.recycle()
 
         // Right header: PO number and purchase date.
-        val orderX = (bm.width * 0.53f).toInt().coerceAtLeast(0)
-        val orderY = (bm.height * 0.045f).toInt().coerceAtLeast(0)
+        val orderX = (bm.width * 0.48f).toInt().coerceAtLeast(0)
+        val orderY = (bm.height * 0.025f).toInt().coerceAtLeast(0)
         val orderW = max(1, bm.width - orderX)
-        val orderBottom = (bm.height * 0.285f).toInt().coerceAtMost(bm.height)
+        val orderBottom = (bm.height * 0.31f).toInt().coerceAtMost(bm.height)
         val orderBm = Bitmap.createBitmap(bm, orderX, orderY, orderW, max(1, orderBottom - orderY))
-        saveJpeg(orderBm, orderFile); orderBm.recycle()
+        saveJpeg(orderBm, orderFile)
+        orderBm.recycle()
 
-        // Only the top populated portion of the table. Most of the lower A4 grid is blank and hurts vision resolution.
-        val tableTop = (bm.height * 0.155f).toInt().coerceAtLeast(0)
-        val tableBottom = (bm.height * 0.52f).toInt().coerceAtMost(bm.height)
+        // Table: preserve more rows than V2.0.9, while excluding most page-footer terms.
+        val tableTop = (bm.height * 0.13f).toInt().coerceAtLeast(0)
+        val tableBottom = (bm.height * 0.72f).toInt().coerceAtMost(bm.height)
         val tableBm = Bitmap.createBitmap(bm, 0, tableTop, bm.width, max(1, tableBottom - tableTop))
-        saveJpeg(tableBm, tableFile); tableBm.recycle()
+        saveJpeg(tableBm, tableFile)
+        tableBm.recycle()
 
-        // Final verification also excludes the page footer, stamps and terms.
-        val verifyBottom = (bm.height * 0.56f).toInt().coerceAtMost(bm.height)
+        // Verification sees the full header + all likely product rows, but not the legal footer.
+        val verifyBottom = (bm.height * 0.74f).toInt().coerceAtMost(bm.height)
         val verifyBm = Bitmap.createBitmap(bm, 0, 0, bm.width, max(1, verifyBottom))
-        saveJpeg(verifyBm, verifyFile); verifyBm.recycle()
+        saveJpeg(verifyBm, verifyFile)
+        verifyBm.recycle()
         bm.recycle()
 
         return PreparedImages(vendorFile, orderFile, tableFile, verifyFile)
+    }
+
+    private fun applyExifOrientation(source: Bitmap, imagePath: String): Bitmap {
+        val degrees = try {
+            when (ExifInterface(imagePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+                ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                else -> 0f
+            }
+        } catch (_: Throwable) {
+            0f
+        }
+        return if (degrees == 0f) source else rotateBitmap(source, degrees)
+    }
+
+    private fun rotateBitmap(source: Bitmap, degrees: Float): Bitmap {
+        val matrix = Matrix().apply { postRotate(degrees) }
+        val rotated = Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
+        if (rotated !== source) source.recycle()
+        return rotated
     }
 
     private fun saveJpeg(bm: Bitmap, file: File) {
@@ -312,6 +396,4 @@ $candidate
         if (cb == null) return
         main.post { cb.onProgress(percent, stage) }
     }
-
-    private fun clip(s: String, max: Int): String = if (s.length <= max) s else s.substring(0, max)
 }
