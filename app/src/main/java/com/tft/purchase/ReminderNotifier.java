@@ -52,14 +52,14 @@ public final class ReminderNotifier {
             nm.createNotificationChannel(channel);
         }
         if (overdue + today + soon == 0) { nm.cancel(NOTIFICATION_ID); return; }
-        Intent open = new Intent(context, SafeMainActivityV203.class);
+        Intent open = new Intent(context, AiMainActivity.class);
         open.putExtra("screen", "reminders");
         open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent pi = PendingIntent.getActivity(context, 20, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         String summary = "已逾期 " + overdue + "｜今天 " + today + "｜" + reminderDays + "天內 " + soon;
         StringBuilder detail = new StringBuilder(summary);
         for (String n : names) detail.append("\n").append(n);
-        if (overdue > 0) detail.append("\n⚠ 請優先處理逾期項目");
+        if (overdue > 0) detail.append("\n請優先處理逾期項目");
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(context, CHANNEL_ID) : new Notification.Builder(context);
         b.setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle("全益採購追蹤｜交貨提醒")
