@@ -38,8 +38,8 @@ public class GemmaSetupActivity extends Activity {
     }
 
     @Override protected void onPause() {
-        super.onPause();
         handler.removeCallbacks(refreshLoop);
+        super.onPause();
     }
 
     private void render() {
@@ -56,7 +56,7 @@ public class GemmaSetupActivity extends Activity {
         titleRow.addView(icon, new LinearLayout.LayoutParams(dp(72),dp(72)));
         LinearLayout tt = new LinearLayout(this); tt.setOrientation(LinearLayout.VERTICAL); tt.setPadding(dp(12),0,0,0);
         tt.addView(label("全益採購追蹤", 27, Color.rgb(15,42,92), true));
-        tt.addView(label("GEMMA AI 採購單辨識", 15, Color.rgb(37,99,235), true));
+        tt.addView(label("GEMMA 4 E4B｜本機免費辨識", 15, Color.rgb(37,99,235), true));
         titleRow.addView(tt,new LinearLayout.LayoutParams(0,-2,1));
         root.addView(titleRow);
 
@@ -68,11 +68,11 @@ public class GemmaSetupActivity extends Activity {
         cp.setMargins(0,dp(20),0,dp(14));
         root.addView(card, cp);
 
-        card.addView(label("AI 模型只需安裝一次", 18, Color.rgb(15,42,92), true));
-        card.addView(label("V2.0.7 由 Gemma 直接看採購單圖片，依序讀取表頭、品項表格，再用整張圖片做最後稽核。OCR 不會再直接填寫欄位。", 15, Color.rgb(71,85,105), false));
-        card.addView(label("模型約 2.6 GB。下載完成後可離線辨識，建議使用 Wi‑Fi。", 14, Color.rgb(220,38,38), true));
+        card.addView(label("V2.0.9 升級較強的離線模型", 18, Color.rgb(15,42,92), true));
+        card.addView(label("採購單會先切成供應商區、採購單號日期區、品項表格區，再交給 Gemma 4 E4B 分開判讀，最後交叉驗證。所有運算都在手機完成，不使用付費 API。", 15, Color.rgb(71,85,105), false));
+        card.addView(label("模型約 3.7 GB。舊 E2B 模型會由新模型取代；建議使用 Wi‑Fi，並保留至少 6 GB 可用空間。", 14, Color.rgb(220,38,38), true));
 
-        status = label("檢查 AI 模型中…", 15, Color.rgb(71,85,105), false);
+        status = label("檢查 Gemma 4 E4B 模型中…", 15, Color.rgb(71,85,105), false);
         root.addView(status);
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
@@ -80,11 +80,11 @@ public class GemmaSetupActivity extends Activity {
         pp.setMargins(0,dp(8),0,dp(12));
         root.addView(progress, pp);
 
-        download = button("下載 Gemma AI 模型（約 2.6 GB）", Color.rgb(37,99,235));
+        download = button("下載 Gemma 4 E4B（約 3.7 GB）", Color.rgb(37,99,235));
         download.setOnClickListener(v -> {
             try {
                 GemmaModelManager.startDownload(this);
-                Toast.makeText(this,"已開始下載 Gemma AI 模型",Toast.LENGTH_LONG).show();
+                Toast.makeText(this,"已開始下載 Gemma 4 E4B",Toast.LENGTH_LONG).show();
                 refresh();
             } catch (Exception e) {
                 Toast.makeText(this,"下載啟動失敗："+e.getMessage(),Toast.LENGTH_LONG).show();
@@ -95,7 +95,7 @@ public class GemmaSetupActivity extends Activity {
         enter = button("進入 APP（僅查看既有資料）", Color.rgb(71,85,105));
         enter.setOnClickListener(v -> openMain());
         root.addView(enter, margins(8,6));
-        root.addView(label("未安裝 Gemma 時仍可進入查看提醒與既有資料，但新增採購單需要 AI 模型。", 13, Color.rgb(100,116,139), false));
+        root.addView(label("模型尚未下載完成時仍可查看既有採購資料與提醒，但新增／重新 AI 分析需要 E4B 模型。", 13, Color.rgb(100,116,139), false));
         setContentView(root);
     }
 
@@ -105,10 +105,10 @@ public class GemmaSetupActivity extends Activity {
 
     private void refresh() {
         if (GemmaModelManager.isReady(this)) {
-            status.setText("Gemma AI 模型已安裝完成 ✓");
+            status.setText("Gemma 4 E4B 已安裝完成 ✓");
             status.setTextColor(Color.rgb(22,163,74));
             progress.setProgress(100);
-            download.setText("Gemma AI 已就緒");
+            download.setText("Gemma 4 E4B 已就緒");
             download.setEnabled(false);
             enter.setText("進入 APP（AI 已就緒）");
             if (!launchedMain) { launchedMain = true; handler.postDelayed(this::openMain, 350); }
@@ -117,15 +117,15 @@ public class GemmaSetupActivity extends Activity {
         GemmaModelManager.Status s = GemmaModelManager.getStatus(this);
         if (s.state == DownloadManager.STATUS_RUNNING || s.state == DownloadManager.STATUS_PENDING || s.state == DownloadManager.STATUS_PAUSED) {
             int p = s.percent(); progress.setProgress(p);
-            status.setText("Gemma AI 模型下載中：" + p + "%  （" + gb(s.downloaded) + " / " + gb(s.total) + " GB）");
+            status.setText("Gemma 4 E4B 下載中：" + p + "%  （" + gb(s.downloaded) + " / " + gb(s.total) + " GB）");
             download.setText("下載進行中…"); download.setEnabled(false);
             enter.setText("進入 APP（下載在背景繼續）");
         } else if (s.state == DownloadManager.STATUS_FAILED) {
-            status.setText("模型下載失敗，請確認網路與儲存空間後重試。錯誤碼：" + s.reason);
+            status.setText("模型下載失敗，請確認 Wi‑Fi 與儲存空間後重試。錯誤碼：" + s.reason);
             status.setTextColor(Color.rgb(220,38,38)); progress.setProgress(0);
-            download.setText("重新下載 Gemma AI 模型"); download.setEnabled(true);
+            download.setText("重新下載 Gemma 4 E4B"); download.setEnabled(true);
         } else {
-            status.setText("Gemma AI 模型尚未安裝"); progress.setProgress(0); download.setEnabled(true);
+            status.setText("Gemma 4 E4B 尚未安裝"); progress.setProgress(0); download.setEnabled(true);
         }
     }
 
