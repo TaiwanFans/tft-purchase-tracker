@@ -1,15 +1,25 @@
 package com.tft.purchase;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 
 import com.google.mlkit.vision.common.InputImage;
-import com.google.mlkit.vision.text.Text;
 import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
 
-/** Runs OCR twice: original image + high-contrast document image, then merges. */
+import java.io.File;
+import java.io.FileOutputStream;
+import java.util.UUID;
+
+/**
+ * Hybrid document recognizer:
+ * 1) ML Kit OCR on original image
+ * 2) ML Kit OCR on enhanced document image
+ * 3) If Gemma is installed, Gemma directly sees the image + OCR text and returns structured JSON
+ * 4) Validate/merge Gemma fields with OCR so uncertain AI output cannot erase usable OCR data.
+ */
 public final class OcrPipelineV204 {
     private OcrPipelineV204() {}
 
@@ -32,7 +42,7 @@ public final class OcrPipelineV204 {
                     try { enhanced = enhanceDocument(source); }
                     catch (Throwable t) {
                         originalRecognizer.close();
-                        callback.onSuccess(original);
+                        maybeRunGemma(source, original, callback);
                         return;
                     }
                     TextRecognizer enhancedRecognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
@@ -43,13 +53,13 @@ public final class OcrPipelineV204 {
                                 originalRecognizer.close();
                                 enhancedRecognizer.close();
                                 enhanced.recycle();
-                                callback.onSuccess(merged);
+                                maybeRunGemma(source, merged, callback);
                             })
                             .addOnFailureListener(e -> {
                                 originalRecognizer.close();
                                 enhancedRecognizer.close();
                                 enhanced.recycle();
-                                callback.onSuccess(original);
+                                maybeRunGemma(source, original, callback);
                             });
                 })
                 .addOnFailureListener(e -> {
@@ -58,10 +68,46 @@ public final class OcrPipelineV204 {
                 });
     }
 
-    /**
-     * Keeps the geometry exactly the same so OCR bounding boxes still map to the
-     * known purchase-order columns. Designed for black/gray text on white paper.
-     */
+    private static void maybeRunGemma(Bitmap source, PurchaseOcrParser.ParsedPurchase ocr, Callback callback) {
+        Context context = TftApplication.appContext();
+        if (context == null || !GemmaBridge.isReady(context)) {
+            callback.onSuccess(ocr);
+            return;
+        }
+        File temp = null;
+        try {
+            temp = new File(context.getCacheDir(), "gemma_purchase_" + UUID.randomUUID() + ".jpg");
+            try (FileOutputStream fos = new FileOutputStream(temp)) {
+                if (!source.compress(Bitmap.CompressFormat.JPEG, 96, fos)) throw new Exception("AI 暫存圖片失敗");
+            }
+            final File imageFile = temp;
+            GemmaBridge.analyze(context, imageFile.getAbsolutePath(), ocr.rawText == null ? "" : ocr.rawText, new GemmaAiCallback() {
+                @Override public void onSuccess(String response) {
+                    try {
+                        PurchaseOcrParser.ParsedPurchase merged = GemmaJsonParser.merge(ocr, response);
+                        callback.onSuccess(merged);
+                    } catch (Throwable t) {
+                        callback.onSuccess(ocr);
+                    } finally {
+                        try { imageFile.delete(); } catch (Throwable ignored) {}
+                    }
+                }
+
+                @Override public void onFailure(String error) {
+                    try { imageFile.delete(); } catch (Throwable ignored) {}
+                    // Gemma failure must never block the user's workflow: keep OCR result.
+                    if (ocr.rawText == null) ocr.rawText = "";
+                    ocr.rawText += "\n\n[Gemma AI 未完成]\n" + error;
+                    callback.onSuccess(ocr);
+                }
+            });
+        } catch (Throwable t) {
+            if (temp != null) try { temp.delete(); } catch (Throwable ignored) {}
+            callback.onSuccess(ocr);
+        }
+    }
+
+    /** Geometry stays unchanged so OCR bounding boxes still match known form columns. */
     private static Bitmap enhanceDocument(Bitmap src) {
         int w = src.getWidth(), h = src.getHeight();
         Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
