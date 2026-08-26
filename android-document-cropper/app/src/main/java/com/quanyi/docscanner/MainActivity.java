@@ -2,6 +2,7 @@ package com.quanyi.docscanner;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.ProgressDialog;
 import android.content.ClipData;
 import android.content.ContentValues;
@@ -42,6 +43,7 @@ import java.util.Locale;
 public class MainActivity extends Activity {
     private static final int REQ_IMAGE = 1001;
     private static final int REQ_WRITE = 1002;
+    private static final int REQ_CAMERA = 1003;
     private static final int MAX_IMAGES = 10;
 
     private static final int BG = Color.rgb(16,24,32);
@@ -60,6 +62,10 @@ public class MainActivity extends Activity {
     private int previewIndex = 0;
     private int previewToken = 0;
     private boolean pendingBatchSave = false;
+    private boolean lowMemoryMode = false;
+
+    private Uri pendingCameraUri;
+    private File pendingCameraFile;
 
     private Bitmap sourceBitmap;
     private Bitmap displayBitmap;
@@ -74,8 +80,22 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
         if (Build.VERSION.SDK_INT >= 23) getWindow().getDecorView().setSystemUiVisibility(0);
+        lowMemoryMode = detectLowMemoryDevice();
         showHome();
     }
+
+    private boolean detectLowMemoryDevice() {
+        try {
+            ActivityManager am = (ActivityManager)getSystemService(ACTIVITY_SERVICE);
+            if (am == null) return false;
+            return am.isLowRamDevice() || am.getMemoryClass() <= 256;
+        } catch (Throwable ignored) {
+            return Build.VERSION.SDK_INT <= 28;
+        }
+    }
+
+    private int sourceMaxDimension() { return lowMemoryMode ? 3200 : 4096; }
+    private int previewMaxDimension() { return lowMemoryMode ? 1050 : 1500; }
 
     private int dp(int v) { return Math.round(v * getResources().getDisplayMetrics().density); }
     private boolean compactUi() {
@@ -185,41 +205,45 @@ public class MainActivity extends Activity {
         ImageView icon = new ImageView(this);
         icon.setImageResource(com.quanyi.docscanner.R.drawable.ic_pixel_document);
         icon.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-        root.addView(icon, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(compactUi()?72:88)));
+        root.addView(icon, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(compactUi()?68:84)));
 
-        TextView title = text("文件裁切器", compactUi()?24:27, true);
+        TextView title = text("文件裁切器", compactUi()?23:27, true);
         title.setGravity(Gravity.CENTER_HORIZONTAL);
         root.addView(title);
-        TextView version = text("PIXEL DOC TOOL  v1.2", 12, true);
+        TextView version = text("PIXEL DOC TOOL  v1.3", 12, true);
         version.setTextColor(GREEN); version.setGravity(Gravity.CENTER_HORIZONTAL);
         root.addView(version);
-        TextView sub = text("把手機照片變成清楚、端正的文件", compactUi()?14:15, false);
+        TextView sub = text("拍照或選圖，快速變成清楚、端正的文件", compactUi()?13:15, false);
         sub.setTextColor(MUTED); sub.setGravity(Gravity.CENTER_HORIZONTAL);
         root.addView(sub);
-        gap(root, 14);
+        gap(root, 12);
 
         LinearLayout badges = new LinearLayout(this);
         badges.setOrientation(LinearLayout.HORIZONTAL);
         badges.addView(badge("最多 10 張"), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         View spacer = new View(this); badges.addView(spacer, new LinearLayout.LayoutParams(dp(8),1));
-        badges.addView(badge("本機處理"), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        badges.addView(badge(lowMemoryMode ? "輕量模式" : "本機處理"), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         root.addView(badges);
-        gap(root, 16);
+        gap(root, 14);
 
-        TextView steps = text("[1] 選擇 1～10 張照片\n[2] 逐張確認文件四角\n[3] 一次套用文件增強\n[4] 全部儲存 / 分享 LINE", compactUi()?14:16, false);
-        steps.setLineSpacing(dp(4), 1f);
+        TextView steps = text("[1] 拍照 / 相簿選圖\n[2] 自動抓角，可拖四角或整條邊\n[3] 放大鏡精準對齊文件邊緣\n[4] 文件增強後儲存 / 分享 LINE", compactUi()?13:15, false);
+        steps.setLineSpacing(dp(3), 1f);
         root.addView(steps);
-        gap(root, 16);
+        gap(root, 14);
 
-        Button pick = button("▶  選擇照片（可多選）", true);
+        LinearLayout inputActions = vertical(0);
+        Button pick = button("▣ 相簿選擇（可多選）", true);
+        Button camera = button("◎ 直接拍照", false);
         pick.setOnClickListener(v -> pickImages());
-        root.addView(pick, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
+        camera.setOnClickListener(v -> takePhoto());
+        addAdaptivePair(inputActions, pick, camera, 56);
+        root.addView(inputActions);
         gap(root, 14);
 
         TextView privacy = text("隱私：所有影像只在手機內處理，不會上傳到伺服器。", 12, true);
         privacy.setTextColor(GREEN);
         root.addView(privacy);
-        TextView note = text("TIP  拍攝時讓文件四周留一點背景，自動抓角會更準。", 12, false);
+        TextView note = text("TIP  文件四周留一點背景，自動抓角會更準。拍照功能使用手機原生相機，舊手機也較穩定。", 12, false);
         note.setTextColor(MUTED);
         root.addView(note);
         setSafeContentView(scroll);
@@ -233,8 +257,47 @@ public class MainActivity extends Activity {
         startActivityForResult(i, REQ_IMAGE);
     }
 
+    private void takePhoto() {
+        try {
+            File dir = new File(getCacheDir(), "camera");
+            if (!dir.exists() && !dir.mkdirs()) throw new Exception("camera cache");
+            File[] old = dir.listFiles();
+            if (old != null) for (File f : old) try { if (f.isFile()) f.delete(); } catch (Throwable ignored) {}
+            pendingCameraFile = new File(dir, "capture_" + System.currentTimeMillis() + ".jpg");
+            if (!pendingCameraFile.exists()) pendingCameraFile.createNewFile();
+            pendingCameraUri = new Uri.Builder()
+                    .scheme("content")
+                    .authority(getPackageName()+".camera")
+                    .appendPath("capture")
+                    .appendPath(pendingCameraFile.getName())
+                    .build();
+
+            Intent camera = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            camera.putExtra(MediaStore.EXTRA_OUTPUT, pendingCameraUri);
+            camera.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            camera.setClipData(ClipData.newRawUri("photo", pendingCameraUri));
+            startActivityForResult(camera, REQ_CAMERA);
+        } catch (Throwable e) {
+            pendingCameraUri = null;
+            pendingCameraFile = null;
+            Toast.makeText(this, "無法啟動相機，請改用相簿選圖。", Toast.LENGTH_LONG).show();
+        }
+    }
+
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == REQ_CAMERA) {
+            if (resultCode == RESULT_OK && pendingCameraUri != null && pendingCameraFile != null && pendingCameraFile.exists() && pendingCameraFile.length() > 0) {
+                ArrayList<Uri> one = new ArrayList<>();
+                one.add(pendingCameraUri);
+                startBatch(one);
+            } else {
+                if (pendingCameraFile != null) try { pendingCameraFile.delete(); } catch (Throwable ignored) {}
+            }
+            return;
+        }
+
         if (requestCode != REQ_IMAGE || resultCode != RESULT_OK || data == null) return;
 
         ArrayList<Uri> picked = new ArrayList<>();
@@ -280,7 +343,7 @@ public class MainActivity extends Activity {
         Uri uri = selectedUris.get(currentIndex);
         new Thread(() -> {
             try {
-                Bitmap b = ImageUtils.loadBitmap(getContentResolver(), uri, 4096);
+                Bitmap b = ImageUtils.loadBitmap(getContentResolver(), uri, sourceMaxDimension());
                 PointF[] corners = ImageUtils.detectDocumentCorners(b);
                 runOnUiThread(() -> {
                     d.dismiss();
@@ -301,11 +364,11 @@ public class MainActivity extends Activity {
 
     private void showCrop(PointF[] corners) {
         screen = Screen.CROP;
-        LinearLayout root = vertical(compactUi()?8:10);
-        TextView title = text("第 " + (currentIndex+1) + " / " + selectedUris.size() + " 張｜四角校正", compactUi()?17:20, true);
+        LinearLayout root = vertical(compactUi()?7:9);
+        TextView title = text("第 " + (currentIndex+1) + " / " + selectedUris.size() + " 張｜裁切範圍", compactUi()?16:19, true);
         title.setGravity(Gravity.CENTER);
         root.addView(title);
-        TextView hint = text("拖曳方形控制點，讓綠框貼齊紙張。", 12, false);
+        TextView hint = text("拖四角精修；拖邊中間控制柄可整條移動。拖曳時會顯示放大鏡。", compactUi()?11:12, false);
         hint.setTextColor(MUTED); hint.setGravity(Gravity.CENTER);
         root.addView(hint);
 
@@ -314,11 +377,11 @@ public class MainActivity extends Activity {
         root.addView(cropView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1f));
 
         LinearLayout actions = vertical(0);
-        actions.setPadding(0, dp(8), 0, 0);
+        actions.setPadding(0, dp(7), 0, 0);
         Button auto = button("↻ 重新抓角", false);
         String confirmLabel = currentIndex < selectedUris.size()-1 ? "✓ 確認・下一張" : "✓ 確認・完成";
         Button crop = button(confirmLabel, true);
-        addAdaptivePair(actions, auto, crop, 54);
+        addAdaptivePair(actions, auto, crop, 52);
         root.addView(actions);
 
         auto.setOnClickListener(v -> {
@@ -348,7 +411,7 @@ public class MainActivity extends Activity {
                 if (!dir.exists() && !dir.mkdirs()) throw new Exception("cache");
                 File f = new File(dir, String.format(Locale.US, "raw_%02d.jpg", currentIndex+1));
                 try (FileOutputStream stream = new FileOutputStream(f)) {
-                    if (!out.compress(Bitmap.CompressFormat.JPEG, 97, stream)) throw new Exception("encode");
+                    if (!out.compress(Bitmap.CompressFormat.JPEG, lowMemoryMode ? 95 : 97, stream)) throw new Exception("encode");
                 }
                 Bitmap finalOut = out;
                 runOnUiThread(() -> {
@@ -362,7 +425,7 @@ public class MainActivity extends Activity {
                 if (out != null && !out.isRecycled()) out.recycle();
                 runOnUiThread(() -> {
                     d.dismiss();
-                    Toast.makeText(this, "裁切失敗，請重新調整四個角。", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "裁切失敗，請重新調整裁切範圍。", Toast.LENGTH_LONG).show();
                 });
             }
         }).start();
@@ -377,12 +440,12 @@ public class MainActivity extends Activity {
         TextView title = text(croppedFiles.size() == 1 ? "文件處理完成" : "已完成 " + croppedFiles.size() + " 張文件", compactUi()?18:20, true);
         title.setGravity(Gravity.CENTER);
         page.addView(title);
-        TextView hint = text("增強設定會套用到全部照片。", 12, false);
+        TextView hint = text("增強設定會套用到全部照片。預覽採輕量處理，儲存與分享仍使用完整裁切畫質。", 12, false);
         hint.setTextColor(MUTED); hint.setGravity(Gravity.CENTER);
         page.addView(hint);
 
         int screenH = getResources().getDisplayMetrics().heightPixels;
-        int imageHeight = Math.max(dp(200), Math.min(dp(compactUi()?320:390), screenH/2));
+        int imageHeight = Math.max(dp(190), Math.min(dp(compactUi()?300:380), screenH/2));
         resultImage = new ImageView(this);
         resultImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
         resultImage.setBackgroundColor(PANEL);
@@ -444,7 +507,7 @@ public class MainActivity extends Activity {
         Button save = button(croppedFiles.size()>1 ? "全部儲存到相簿" : "儲存到相簿", true);
         addAdaptivePair(actions, share, save, 52);
         gap(actions,8);
-        Button again = button("重新選擇照片", false);
+        Button again = button("重新拍照 / 選圖", false);
         actions.addView(again, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,dp(48)));
         shell.addView(actions, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));
 
@@ -452,9 +515,36 @@ public class MainActivity extends Activity {
         sharpSwitch.setOnCheckedChangeListener((b,c) -> refreshPreview());
         share.setOnClickListener(v -> shareAll());
         save.setOnClickListener(v -> saveAll());
-        again.setOnClickListener(v -> pickImages());
+        again.setOnClickListener(v -> showHome());
         setSafeContentView(shell);
         refreshPreview();
+    }
+
+    private Bitmap decodePreview(File file) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+            int sample = 1;
+            int max = previewMaxDimension();
+            while (Math.max(bounds.outWidth/sample, bounds.outHeight/sample) > max*1.35f) sample *= 2;
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = Math.max(1,sample);
+            opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            Bitmap b = BitmapFactory.decodeFile(file.getAbsolutePath(), opts);
+            if (b == null) return null;
+            int longest = Math.max(b.getWidth(), b.getHeight());
+            if (longest > max) {
+                float scale = max/(float)longest;
+                Bitmap scaled = Bitmap.createScaledBitmap(b, Math.max(1,Math.round(b.getWidth()*scale)), Math.max(1,Math.round(b.getHeight()*scale)), true);
+                if (scaled != b) b.recycle();
+                b = scaled;
+            }
+            return b;
+        } catch (Throwable ignored) {
+            return null;
+        }
     }
 
     private void refreshPreview() {
@@ -465,7 +555,7 @@ public class MainActivity extends Activity {
         final boolean bright = brightSwitch != null && brightSwitch.isChecked();
         final boolean sharp = sharpSwitch != null && sharpSwitch.isChecked();
         new Thread(() -> {
-            Bitmap raw = BitmapFactory.decodeFile(croppedFiles.get(idx).getAbsolutePath());
+            Bitmap raw = decodePreview(croppedFiles.get(idx));
             if (raw == null) return;
             Bitmap enhanced = null;
             try { enhanced = ImageUtils.enhance(raw, bright, sharp); }
@@ -496,7 +586,7 @@ public class MainActivity extends Activity {
             if (!dir.exists() && !dir.mkdirs()) throw new Exception("cache");
             File f = new File(dir, String.format(Locale.US, "document_%02d_%d.jpg", index+1, System.currentTimeMillis()));
             try (FileOutputStream stream = new FileOutputStream(f)) {
-                if (!out.compress(Bitmap.CompressFormat.JPEG, 97, stream)) throw new Exception("encode");
+                if (!out.compress(Bitmap.CompressFormat.JPEG, lowMemoryMode ? 95 : 97, stream)) throw new Exception("encode");
             }
             return f;
         } finally {
@@ -613,7 +703,7 @@ public class MainActivity extends Activity {
             Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
             if (uri == null) throw new Exception("insert");
             try (OutputStream out = getContentResolver().openOutputStream(uri)) {
-                if (out == null || !b.compress(Bitmap.CompressFormat.JPEG, 97, out)) throw new Exception("write");
+                if (out == null || !b.compress(Bitmap.CompressFormat.JPEG, lowMemoryMode ? 95 : 97, out)) throw new Exception("write");
             }
             cv.clear(); cv.put(MediaStore.Images.Media.IS_PENDING, 0);
             getContentResolver().update(uri, cv, null, null);
@@ -623,7 +713,7 @@ public class MainActivity extends Activity {
             if (!dir.exists() && !dir.mkdirs()) throw new Exception("mkdir");
             File f = new File(dir, name);
             try (FileOutputStream out = new FileOutputStream(f)) {
-                if (!b.compress(Bitmap.CompressFormat.JPEG, 97, out)) throw new Exception("write");
+                if (!b.compress(Bitmap.CompressFormat.JPEG, lowMemoryMode ? 95 : 97, out)) throw new Exception("write");
             }
             android.media.MediaScannerConnection.scanFile(this, new String[]{f.getAbsolutePath()}, new String[]{"image/jpeg"}, null);
         }
@@ -659,7 +749,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (screen == Screen.CROP) {
-            Toast.makeText(this, "已取消本次批次處理。", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "已取消本次處理。", Toast.LENGTH_SHORT).show();
             selectedUris.clear(); croppedFiles.clear(); clearBatchFiles(); showHome();
             return;
         }
