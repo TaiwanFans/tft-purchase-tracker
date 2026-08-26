@@ -4,61 +4,107 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/** Parses Gemma vision JSON as the single source of truth. */
 public final class GemmaJsonParser {
     private GemmaJsonParser() {}
 
-    public static PurchaseOcrParser.ParsedPurchase merge(PurchaseOcrParser.ParsedPurchase base, String response) {
-        if (base == null) base = new PurchaseOcrParser.ParsedPurchase();
+    /**
+     * Legacy entry point kept for callers compiled against older versions.
+     * OCR/base data is deliberately NOT used to fill missing Gemma values.
+     */
+    public static PurchaseOcrParser.ParsedPurchase merge(PurchaseOcrParser.ParsedPurchase ignoredBase, String response) {
+        return parseGemmaOnly(response);
+    }
+
+    public static PurchaseOcrParser.ParsedPurchase parseGemmaOnly(String response) {
+        PurchaseOcrParser.ParsedPurchase out = new PurchaseOcrParser.ParsedPurchase();
+        out.rawText = "[Gemma Vision JSON]\n" + (response == null ? "" : response);
+
         JSONObject root = parseObject(response);
-        if (root == null) return base;
+        if (root == null) return out;
 
-        String vendor = clean(root.optString("vendor", ""));
-        String location = clean(root.optString("location", ""));
-        String orderNo = normalizeOrderNo(root.optString("order_no", ""));
-        String purchaseDate = normalizeDate(root.optString("purchase_date", ""));
-
-        if (!vendor.isEmpty()) base.vendor = vendor;
-        if (!location.isEmpty()) base.location = location;
-        if (!orderNo.isEmpty()) base.orderNo = orderNo;
-        if (!purchaseDate.isEmpty()) base.purchaseDate = purchaseDate;
+        out.vendor = clean(root.optString("vendor", ""));
+        out.location = clean(root.optString("location", ""));
+        out.orderNo = normalizeOrderNo(root.optString("order_no", ""));
+        out.purchaseDate = normalizeDate(root.optString("purchase_date", ""));
 
         JSONArray arr = root.optJSONArray("items");
-        if (arr != null && arr.length() > 0) {
-            List<PurchaseDbHelper.PurchaseItem> modelItems = new ArrayList<>();
-            for (int i = 0; i < arr.length(); i++) {
-                JSONObject j = arr.optJSONObject(i);
-                if (j == null) continue;
-                PurchaseDbHelper.PurchaseItem item = new PurchaseDbHelper.PurchaseItem();
-                item.lineNo = clean(j.optString("line_no", ""));
-                item.description = clean(j.optString("description", ""));
-                item.quantity = clean(j.optString("quantity", ""));
-                item.unit = clean(j.optString("unit", ""));
-                item.unitPrice = clean(j.optString("unit_price", ""));
-                item.subtotal = clean(j.optString("subtotal", ""));
-                item.deliveryDate = normalizeDate(j.optString("delivery_date", ""));
-                item.note = clean(j.optString("note", ""));
+        if (arr == null) return out;
 
-                if (item.description.contains("以下空白") || item.description.contains("本頁小計") || item.description.equals("空白")) continue;
-                if (item.description.isEmpty() && item.quantity.isEmpty() && item.deliveryDate.isEmpty()) continue;
+        Set<String> seenLineNos = new HashSet<>();
+        int accepted = 0;
+        for (int i = 0; i < arr.length() && accepted < 30; i++) {
+            JSONObject j = arr.optJSONObject(i);
+            if (j == null) continue;
 
-                PurchaseDbHelper.PurchaseItem fallback = findFallback(base.items, item.lineNo, i);
-                if (fallback != null) fillMissing(item, fallback);
-                modelItems.add(item);
-            }
-            if (!modelItems.isEmpty()) {
-                base.items.clear();
-                base.items.addAll(modelItems);
-            }
+            PurchaseDbHelper.PurchaseItem item = new PurchaseDbHelper.PurchaseItem();
+            item.lineNo = normalizeLineNo(j.optString("line_no", ""));
+            item.description = clean(j.optString("description", ""));
+            item.quantity = normalizeNumberText(j.optString("quantity", ""));
+            item.unit = clean(j.optString("unit", ""));
+            item.unitPrice = normalizeNumberText(j.optString("unit_price", ""));
+            item.subtotal = normalizeNumberText(j.optString("subtotal", ""));
+            item.deliveryDate = normalizeDate(j.optString("delivery_date", ""));
+            item.note = clean(j.optString("note", ""));
+
+            if (!isRealPurchaseItem(item)) continue;
+            if (!item.lineNo.isEmpty() && !seenLineNos.add(item.lineNo)) continue;
+
+            out.items.add(item);
+            accepted++;
+        }
+        return out;
+    }
+
+    public static boolean hasUsefulData(PurchaseOcrParser.ParsedPurchase p) {
+        if (p == null) return false;
+        return !safe(p.orderNo).isEmpty()
+                || !safe(p.vendor).isEmpty()
+                || !safe(p.purchaseDate).isEmpty()
+                || (p.items != null && !p.items.isEmpty());
+    }
+
+    private static boolean isRealPurchaseItem(PurchaseDbHelper.PurchaseItem item) {
+        String d = compact(item.description);
+        if (d.isEmpty()) return false;
+
+        String[] banned = new String[] {
+                "以下空白", "本頁小計", "頁小計", "稅額", "總計", "合計",
+                "出貨時請標柱", "出貨時請標註", "採購單編號", "送貨前一天",
+                "本公司採購資料為公司機密", "公司機密", "禁止外洩", "禁止外泄",
+                "收到本採購單後", "24小時內回傳", "24小時內回傳",
+                "如內容文字及交期無法配合", "如內容文字", "無誤後蓋章或簽名",
+                "如發生糾紛", "彰化地方法院", "第一審管轄法院",
+                "審核", "主管", "經辦人", "廠商確認", "FAXED", "FAX",
+                "傳真", "回傳04-823-5682", "回傳04－823－5682"
+        };
+        for (String s : banned) {
+            if (d.contains(compact(s))) return false;
         }
 
-        String raw = base.rawText == null ? "" : base.rawText;
-        base.rawText = raw + "\n\n[Gemma AI JSON]\n" + response;
-        return base;
+        // Standard purchase-order lines use numeric item numbers. If Gemma emitted a non-numeric
+        // footer bullet or sentence as line_no, reject it rather than inventing a row.
+        if (!item.lineNo.isEmpty() && !item.lineNo.matches("\\d{1,3}")) return false;
+
+        // A zero-quantity row in this form is generally the "以下空白" sentinel. Do not show it.
+        Double q = parseNumber(item.quantity);
+        if (q != null && Math.abs(q) < 0.0000001d) return false;
+
+        // Require at least one piece of row evidence besides the description. This prevents footer
+        // paragraphs from becoming items even if the model accidentally assigns a line number.
+        boolean hasRowValue = !safe(item.quantity).isEmpty()
+                || !safe(item.unit).isEmpty()
+                || !safe(item.unitPrice).isEmpty()
+                || !safe(item.subtotal).isEmpty()
+                || !safe(item.deliveryDate).isEmpty();
+        return hasRowValue;
     }
 
     private static JSONObject parseObject(String response) {
@@ -71,27 +117,26 @@ public final class GemmaJsonParser {
         catch (Exception e) { return null; }
     }
 
-    private static PurchaseDbHelper.PurchaseItem findFallback(List<PurchaseDbHelper.PurchaseItem> base, String lineNo, int index) {
-        if (base == null || base.isEmpty()) return null;
-        if (lineNo != null && !lineNo.isEmpty()) {
-            String a = lineNo.replaceFirst("^0+", "");
-            for (PurchaseDbHelper.PurchaseItem i : base) {
-                String b = i.lineNo == null ? "" : i.lineNo.replaceFirst("^0+", "");
-                if (!a.isEmpty() && a.equals(b)) return i;
-            }
-        }
-        return index >= 0 && index < base.size() ? base.get(index) : null;
+    private static String normalizeLineNo(String s) {
+        String x = clean(s).replaceAll("[^0-9]", "");
+        if (x.isEmpty() || x.length() > 3) return "";
+        try {
+            int n = Integer.parseInt(x);
+            if (n <= 0 || n > 999) return "";
+            return String.format(Locale.TAIWAN, "%03d", n);
+        } catch (Exception e) { return ""; }
     }
 
-    private static void fillMissing(PurchaseDbHelper.PurchaseItem x, PurchaseDbHelper.PurchaseItem f) {
-        if (x.lineNo.isEmpty()) x.lineNo = f.lineNo;
-        if (x.description.isEmpty()) x.description = f.description;
-        if (x.quantity.isEmpty()) x.quantity = f.quantity;
-        if (x.unit.isEmpty()) x.unit = f.unit;
-        if (x.unitPrice.isEmpty()) x.unitPrice = f.unitPrice;
-        if (x.subtotal.isEmpty()) x.subtotal = f.subtotal;
-        if (x.deliveryDate.isEmpty()) x.deliveryDate = f.deliveryDate;
-        if (x.note.isEmpty()) x.note = f.note;
+    private static String normalizeNumberText(String s) {
+        if (s == null) return "";
+        String x = clean(s)
+                .replace("，", ",")
+                .replace("。", ".")
+                .replaceAll("(?<=\\d)\\s+(?=\\d)", "")
+                .trim();
+        // Keep commas/decimal point for readability, but reject long prose accidentally placed here.
+        if (x.length() > 40) return "";
+        return x;
     }
 
     private static String normalizeOrderNo(String s) {
@@ -103,7 +148,7 @@ public final class GemmaJsonParser {
                 .replaceAll("(?<=\\d)B(?=\\d)", "8")
                 .replaceAll("[^A-Z0-9\\-]", "");
         int digits = x.replaceAll("\\D", "").length();
-        if (digits < 6 || x.length() > 28) return "";
+        if (digits < 8 || x.length() > 28) return "";
         return x;
     }
 
@@ -120,8 +165,24 @@ public final class GemmaJsonParser {
         } catch (Exception e) { return ""; }
     }
 
+    private static Double parseNumber(String s) {
+        try {
+            String x = safe(s).replace(",", "").replaceAll("[^0-9.\\-]", "");
+            if (x.isEmpty() || x.equals("-") || x.equals(".")) return null;
+            return Double.parseDouble(x);
+        } catch (Exception e) { return null; }
+    }
+
     private static String clean(String s) {
         if (s == null) return "";
         return s.replace('\u3000', ' ').replaceAll("[ \\t]+", " ").trim();
+    }
+
+    private static String compact(String s) {
+        return safe(s).replaceAll("\\s+", "").replace("：", ":").trim();
+    }
+
+    private static String safe(String s) {
+        return s == null ? "" : s;
     }
 }
