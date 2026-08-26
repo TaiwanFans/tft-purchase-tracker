@@ -2,23 +2,17 @@ package com.tft.purchase;
 
 import android.content.Context;
 import android.graphics.Bitmap;
-import android.graphics.Color;
-
-import com.google.mlkit.vision.common.InputImage;
-import com.google.mlkit.vision.text.TextRecognition;
-import com.google.mlkit.vision.text.TextRecognizer;
-import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.util.UUID;
 
 /**
- * Hybrid document recognizer:
- * 1) ML Kit OCR on original image
- * 2) ML Kit OCR on enhanced document image
- * 3) If Gemma is installed, Gemma directly sees the image + OCR text and returns structured JSON
- * 4) Validate/merge Gemma fields with OCR so uncertain AI output cannot erase usable OCR data.
+ * V2.0.6 purchase-order recognizer.
+ *
+ * Gemma vision is now the ONLY field/item decision maker. OCR is intentionally not run here,
+ * because OCR row parsing previously contaminated good AI output (for example 200 -> 2 and
+ * footer instructions becoming fake items 003/004/005).
  */
 public final class OcrPipelineV204 {
     private OcrPipelineV204() {}
@@ -33,98 +27,92 @@ public final class OcrPipelineV204 {
             callback.onFailure(new IllegalArgumentException("圖片無法解碼"));
             return;
         }
-        TextRecognizer originalRecognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
-        InputImage originalImage = InputImage.fromBitmap(source, 0);
-        originalRecognizer.process(originalImage)
-                .addOnSuccessListener(originalText -> {
-                    PurchaseOcrParser.ParsedPurchase original = PurchaseOcrParserV204.parse(originalText, source.getWidth(), source.getHeight());
-                    Bitmap enhanced;
-                    try { enhanced = enhanceDocument(source); }
-                    catch (Throwable t) {
-                        originalRecognizer.close();
-                        maybeRunGemma(source, original, callback);
-                        return;
-                    }
-                    TextRecognizer enhancedRecognizer = TextRecognition.getClient(new ChineseTextRecognizerOptions.Builder().build());
-                    enhancedRecognizer.process(InputImage.fromBitmap(enhanced, 0))
-                            .addOnSuccessListener(enhancedText -> {
-                                PurchaseOcrParser.ParsedPurchase second = PurchaseOcrParserV204.parse(enhancedText, enhanced.getWidth(), enhanced.getHeight());
-                                PurchaseOcrParser.ParsedPurchase merged = PurchaseOcrParserV204.merge(original, second);
-                                originalRecognizer.close();
-                                enhancedRecognizer.close();
-                                enhanced.recycle();
-                                maybeRunGemma(source, merged, callback);
-                            })
-                            .addOnFailureListener(e -> {
-                                originalRecognizer.close();
-                                enhancedRecognizer.close();
-                                enhanced.recycle();
-                                maybeRunGemma(source, original, callback);
-                            });
-                })
-                .addOnFailureListener(e -> {
-                    originalRecognizer.close();
-                    callback.onFailure(e instanceof Exception ? (Exception)e : new Exception(e));
-                });
-    }
 
-    private static void maybeRunGemma(Bitmap source, PurchaseOcrParser.ParsedPurchase ocr, Callback callback) {
         Context context = TftApplication.appContext();
-        if (context == null || !GemmaBridge.isReady(context)) {
-            callback.onSuccess(ocr);
+        if (context == null) {
+            callback.onFailure(new IllegalStateException("APP 尚未初始化"));
             return;
         }
+        if (!GemmaBridge.isReady(context)) {
+            callback.onFailure(new IllegalStateException("請先完成 Gemma AI 模型安裝，再進行採購單辨識。此版本不再用 OCR 自動填欄位，以避免錯誤資料。"));
+            return;
+        }
+
+        Bitmap prepared = null;
         File temp = null;
         try {
-            temp = new File(context.getCacheDir(), "gemma_purchase_" + UUID.randomUUID() + ".jpg");
+            prepared = prepareForGemma(source);
+            temp = new File(context.getCacheDir(), "gemma_purchase_only_" + UUID.randomUUID() + ".jpg");
             try (FileOutputStream fos = new FileOutputStream(temp)) {
-                if (!source.compress(Bitmap.CompressFormat.JPEG, 96, fos)) throw new Exception("AI 暫存圖片失敗");
+                if (!prepared.compress(Bitmap.CompressFormat.JPEG, 100, fos)) {
+                    throw new Exception("AI 暫存圖片失敗");
+                }
             }
+
             final File imageFile = temp;
-            GemmaBridge.analyze(context, imageFile.getAbsolutePath(), ocr.rawText == null ? "" : ocr.rawText, new GemmaAiCallback() {
+            final Bitmap preparedFinal = prepared;
+            GemmaBridge.analyze(context, imageFile.getAbsolutePath(), "", new GemmaAiCallback() {
                 @Override public void onSuccess(String response) {
                     try {
-                        PurchaseOcrParser.ParsedPurchase merged = GemmaJsonParser.merge(ocr, response);
-                        callback.onSuccess(merged);
+                        PurchaseOcrParser.ParsedPurchase parsed = GemmaJsonParser.parseGemmaOnly(response);
+                        if (!GemmaJsonParser.hasUsefulData(parsed)) {
+                            callback.onFailure(new Exception("Gemma 沒有可靠讀到採購單欄位。請確認圖片清楚、方向正確後重新辨識。"));
+                            return;
+                        }
+                        callback.onSuccess(parsed);
                     } catch (Throwable t) {
-                        callback.onSuccess(ocr);
+                        callback.onFailure(t instanceof Exception ? (Exception)t : new Exception(t));
                     } finally {
                         try { imageFile.delete(); } catch (Throwable ignored) {}
+                        if (preparedFinal != source && !preparedFinal.isRecycled()) {
+                            try { preparedFinal.recycle(); } catch (Throwable ignored) {}
+                        }
                     }
                 }
 
                 @Override public void onFailure(String error) {
                     try { imageFile.delete(); } catch (Throwable ignored) {}
-                    // Gemma failure must never block the user's workflow: keep OCR result.
-                    if (ocr.rawText == null) ocr.rawText = "";
-                    ocr.rawText += "\n\n[Gemma AI 未完成]\n" + error;
-                    callback.onSuccess(ocr);
+                    if (preparedFinal != source && !preparedFinal.isRecycled()) {
+                        try { preparedFinal.recycle(); } catch (Throwable ignored) {}
+                    }
+                    callback.onFailure(new Exception(error));
                 }
             });
         } catch (Throwable t) {
             if (temp != null) try { temp.delete(); } catch (Throwable ignored) {}
-            callback.onSuccess(ocr);
+            if (prepared != null && prepared != source && !prepared.isRecycled()) {
+                try { prepared.recycle(); } catch (Throwable ignored) {}
+            }
+            callback.onFailure(t instanceof Exception ? (Exception)t : new Exception(t));
         }
     }
 
-    /** Geometry stays unchanged so OCR bounding boxes still match known form columns. */
-    private static Bitmap enhanceDocument(Bitmap src) {
-        int w = src.getWidth(), h = src.getHeight();
-        Bitmap out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        int[] row = new int[w];
-        for (int y = 0; y < h; y++) {
-            src.getPixels(row, 0, w, 0, y, w, 1);
-            for (int x = 0; x < w; x++) {
-                int c = row[x];
-                int gray = (Color.red(c) * 30 + Color.green(c) * 59 + Color.blue(c) * 11) / 100;
-                int v = (int)((gray - 128) * 1.55f + 128);
-                if (v > 220) v = 255;
-                else if (v < 60) v = 0;
-                else v = Math.max(0, Math.min(255, v));
-                row[x] = Color.rgb(v, v, v);
-            }
-            out.setPixels(row, 0, w, 0, y, w, 1);
-        }
-        return out;
+    /**
+     * The user's purchase orders use a stable A4 form. All useful header + item-table data is in
+     * the upper part of the page, while the lower area contains terms, stamps and signatures that
+     * must never become items. Cropping that noise also makes printed characters larger to Gemma.
+     */
+    private static Bitmap prepareForGemma(Bitmap source) {
+        int w = source.getWidth();
+        int h = source.getHeight();
+        if (w <= 0 || h <= 0) return source;
+
+        // Keep enough space to include the entire item table and 本頁小計 boundary, while removing
+        // most footer clauses/signatures that caused false 003/004/005 rows.
+        int cropH = Math.max(1, Math.min(h, Math.round(h * 0.75f)));
+        Bitmap crop = Bitmap.createBitmap(source, 0, 0, w, cropH);
+
+        // Give small gallery images more effective text resolution; cap large camera photos to
+        // control memory and inference time on-device.
+        int targetW;
+        if (w < 1600) targetW = 1600;
+        else if (w > 2200) targetW = 2200;
+        else targetW = w;
+
+        if (targetW == w) return crop;
+        int targetH = Math.max(1, Math.round(cropH * (targetW / (float)w)));
+        Bitmap scaled = Bitmap.createScaledBitmap(crop, targetW, targetH, true);
+        if (scaled != crop && !crop.isRecycled()) crop.recycle();
+        return scaled;
     }
 }
