@@ -11,18 +11,18 @@ import android.os.Build;
 import android.os.IBinder;
 
 import java.util.ArrayList;
-import java.util.List;
 
 /**
- * Foreground service for long Gemma inference. The analysis continues when the UI is backgrounded.
+ * Foreground service for long Gemma inference.
+ * V2.0.8 guarantees that every analyzed image leaves a visible purchase record.
  */
 public class AiAnalysisService extends Service {
     public static final String ACTION_UPDATE = "com.tft.purchase.AI_JOB_UPDATE";
-    private static final String CHANNEL = "gemma_analysis_v207";
-    private static final int NOTIFICATION_ID = 8235707;
+    private static final String CHANNEL = "gemma_analysis_v208";
+    private static final int NOTIFICATION_ID = 8235708;
     private volatile boolean processing = false;
-    private int success = 0;
-    private int failed = 0;
+    private int created = 0;
+    private int warnings = 0;
 
     public static void start(Context context, ArrayList<String> imagePaths, long replaceId) {
         if (imagePaths == null || imagePaths.isEmpty()) return;
@@ -34,15 +34,13 @@ public class AiAnalysisService extends Service {
         else context.startService(i);
     }
 
-    @Override
-    public void onCreate() {
+    @Override public void onCreate() {
         super.onCreate();
         createChannel();
         startForeground(NOTIFICATION_ID, notification("AI 準備分析採購單", 1, false));
     }
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (processing) return START_STICKY;
         ArrayList<String> paths = intent == null ? null : intent.getStringArrayListExtra("paths");
         long replaceId = intent == null ? -1 : intent.getLongExtra("replace_id", -1);
@@ -65,8 +63,8 @@ public class AiAnalysisService extends Service {
         }
 
         processing = true;
-        success = 0;
-        failed = 0;
+        created = 0;
+        warnings = 0;
         processNext(paths, 0, replaceId);
         return START_STICKY;
     }
@@ -74,25 +72,31 @@ public class AiAnalysisService extends Service {
     private void processNext(ArrayList<String> paths, int index, long replaceId) {
         if (index >= paths.size()) {
             processing = false;
-            AiJobStore.done(this, success, failed);
-            String msg = failed == 0 ? "AI 已完成 " + success + " 張採購單" : "AI 完成：成功 " + success + "、需重試 " + failed;
+            AiJobStore.done(this, created, warnings);
+            String msg;
+            if (created <= 0) msg = "AI 分析結束，但沒有建立採購單";
+            else if (warnings > 0) msg = "已建立 " + created + " 張採購單；" + warnings + " 張建議重新 AI 分析";
+            else msg = "已建立 " + created + " 張採購單，點此查看";
             publish(msg, 100, true);
             sendUpdate();
             stopSelf();
             return;
         }
+
         final String path = paths.get(index);
         final int total = paths.size();
         final int base = (int)((index * 100f) / total);
         final int span = Math.max(1, 100 / total);
-        AiJobStore.progress(this, Math.max(1, base + 2), "第 " + (index + 1) + "/" + total + " 張：準備 AI", index + 1, total, success, failed);
+        AiJobStore.progress(this, Math.max(1, base + 2),
+                "第 " + (index + 1) + "/" + total + " 張：準備 AI",
+                index + 1, total, created, 0);
         publish("第 " + (index + 1) + "/" + total + " 張：準備 AI", Math.max(1, base + 2), false);
         sendUpdate();
 
         GemmaBridge.analyzeAdvanced(this, path, (percent, stage) -> {
             int overall = Math.min(98, base + Math.max(1, (int)(span * (percent / 100f))));
             String text = "第 " + (index + 1) + "/" + total + " 張｜" + stage;
-            AiJobStore.progress(this, overall, text, index + 1, total, success, failed);
+            AiJobStore.progress(this, overall, text, index + 1, total, created, 0);
             publish(text, overall, false);
             sendUpdate();
         }, new GemmaAiCallback() {
@@ -100,35 +104,60 @@ public class AiAnalysisService extends Service {
                 try {
                     PurchaseOcrParser.ParsedPurchase parsed = GemmaJsonParser.parseGemmaOnly(response);
                     AiResultValidator.Validation validation = AiResultValidator.validateAndSanitize(parsed);
-                    if (!validation.reliable) {
-                        failed++;
-                        AiJobStore.progress(AiAnalysisService.this, Math.min(98, base + span - 1),
-                                "第 " + (index + 1) + " 張未通過可靠度檢查：" + validation.message,
-                                index + 1, total, success, failed);
-                        sendUpdate();
-                    } else {
-                        long id = saveParsed(parsed, path, replaceId > 0 && total == 1 ? replaceId : -1);
-                        success++;
-                        AiJobStore.appendId(AiAnalysisService.this, id);
-                    }
+                    boolean reliable = validation.reliable;
+                    long id = saveParsed(parsed, path,
+                            replaceId > 0 && total == 1 ? replaceId : -1,
+                            reliable,
+                            validation.message);
+                    created++;
+                    if (!reliable) warnings++;
+                    AiJobStore.appendId(AiAnalysisService.this, id);
+                    String stage = reliable
+                            ? "第 " + (index + 1) + " 張已建立採購單 ✓"
+                            : "第 " + (index + 1) + " 張已建立；部分欄位建議重新 AI 分析";
+                    AiJobStore.progress(AiAnalysisService.this, Math.min(98, base + span - 1),
+                            stage, index + 1, total, created, 0);
+                    sendUpdate();
                 } catch (Throwable t) {
-                    failed++;
+                    // Never let an analyzed image disappear. Leave a retryable record with the original image.
+                    try {
+                        long id = savePlaceholder(path,
+                                replaceId > 0 && total == 1 ? replaceId : -1,
+                                "AI 結果處理失敗：" + safeMessage(t));
+                        created++;
+                        warnings++;
+                        AiJobStore.appendId(AiAnalysisService.this, id);
+                    } catch (Throwable ignored) {}
                 }
                 processNext(paths, index + 1, replaceId);
             }
 
             @Override public void onFailure(String error) {
-                failed++;
-                AiJobStore.progress(AiAnalysisService.this, Math.min(98, base + span - 1),
-                        "第 " + (index + 1) + " 張 AI 失敗：" + error,
-                        index + 1, total, success, failed);
-                sendUpdate();
+                try {
+                    long id = savePlaceholder(path,
+                            replaceId > 0 && total == 1 ? replaceId : -1,
+                            "Gemma AI 分析失敗：" + (error == null ? "未知錯誤" : error));
+                    created++;
+                    warnings++;
+                    AiJobStore.appendId(AiAnalysisService.this, id);
+                    AiJobStore.progress(AiAnalysisService.this, Math.min(98, base + span - 1),
+                            "第 " + (index + 1) + " 張已留下原圖，可從採購單內重新 AI 分析",
+                            index + 1, total, created, 0);
+                    sendUpdate();
+                } catch (Throwable ignored) {}
                 processNext(paths, index + 1, replaceId);
             }
         });
     }
 
-    private long saveParsed(PurchaseOcrParser.ParsedPurchase parsed, String imagePath, long replaceId) {
+    private long savePlaceholder(String imagePath, long replaceId, String reason) {
+        PurchaseOcrParser.ParsedPurchase p = new PurchaseOcrParser.ParsedPurchase();
+        p.rawText = "[AI_STATUS:RETRY]\n[AI_VALIDATION:" + reason + "]";
+        return saveParsed(p, imagePath, replaceId, false, reason);
+    }
+
+    private long saveParsed(PurchaseOcrParser.ParsedPurchase parsed, String imagePath,
+                            long replaceId, boolean reliable, String validationMessage) {
         PurchaseDbHelper db = new PurchaseDbHelper(this);
         PurchaseDbHelper.Purchase p;
         if (replaceId > 0) {
@@ -137,27 +166,38 @@ public class AiAnalysisService extends Service {
         } else {
             p = new PurchaseDbHelper.Purchase();
         }
+
         String preservedSignature = p.signatureReturnDate;
         String preservedNotes = p.notes;
         boolean preservedCompleted = p.completed;
 
-        p.vendorName = parsed.vendor;
-        p.location = parsed.location;
-        p.orderNo = parsed.orderNo;
-        p.purchaseDate = parsed.purchaseDate;
-        p.imagePath = imagePath;
-        p.rawOcr = parsed.rawText;
+        p.vendorName = parsed.vendor == null ? "" : parsed.vendor;
+        p.location = parsed.location == null ? "" : parsed.location;
+        p.orderNo = parsed.orderNo == null ? "" : parsed.orderNo;
+        p.purchaseDate = parsed.purchaseDate == null ? "" : parsed.purchaseDate;
+        p.imagePath = imagePath == null ? "" : imagePath;
+        p.rawOcr = (reliable ? "[AI_STATUS:OK]" : "[AI_STATUS:RETRY]") +
+                "\n[AI_VALIDATION:" + (validationMessage == null ? "" : validationMessage) + "]\n" +
+                (parsed.rawText == null ? "" : parsed.rawText);
         p.signatureReturnDate = preservedSignature == null ? "" : preservedSignature;
         p.notes = preservedNotes == null ? "" : preservedNotes;
         p.completed = preservedCompleted;
 
         StringBuilder legacy = new StringBuilder();
         String earliest = "";
-        for (PurchaseDbHelper.PurchaseItem i : parsed.items) {
-            if (legacy.length() > 0) legacy.append("\n");
-            legacy.append(i.description);
-            if (i.quantity != null && !i.quantity.isEmpty()) legacy.append(" × ").append(i.quantity).append(i.unit == null ? "" : i.unit);
-            if (i.deliveryDate != null && !i.deliveryDate.isEmpty() && (earliest.isEmpty() || i.deliveryDate.compareTo(earliest) < 0)) earliest = i.deliveryDate;
+        if (parsed.items != null) {
+            for (PurchaseDbHelper.PurchaseItem i : parsed.items) {
+                if (i == null) continue;
+                if (legacy.length() > 0) legacy.append("\n");
+                legacy.append(i.description == null ? "" : i.description);
+                if (i.quantity != null && !i.quantity.isEmpty()) {
+                    legacy.append(" × ").append(i.quantity).append(i.unit == null ? "" : i.unit);
+                }
+                if (i.deliveryDate != null && !i.deliveryDate.isEmpty() &&
+                        (earliest.isEmpty() || i.deliveryDate.compareTo(earliest) < 0)) {
+                    earliest = i.deliveryDate;
+                }
+            }
         }
         p.legacyItems = legacy.toString();
         p.legacyDeliveryDate = earliest;
@@ -169,9 +209,15 @@ public class AiAnalysisService extends Service {
         } else {
             id = db.insert(p);
         }
-        db.replaceItems(id, parsed.items);
+        db.replaceItems(id, parsed.items == null ? new ArrayList<>() : parsed.items);
         try { DriveBackupHelper.backupIfDueAsync(this); } catch (Throwable ignored) {}
         return id;
+    }
+
+    private String safeMessage(Throwable t) {
+        if (t == null) return "未知錯誤";
+        String m = t.getMessage();
+        return m == null || m.trim().isEmpty() ? t.getClass().getSimpleName() : m;
     }
 
     private void createChannel() {
@@ -188,10 +234,12 @@ public class AiAnalysisService extends Service {
         Intent open = new Intent(this, AiMainActivity.class);
         open.putExtra("screen", finished ? "purchases" : "analysis");
         open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        PendingIntent pi = PendingIntent.getActivity(this, 71, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
+        PendingIntent pi = PendingIntent.getActivity(this, 71, open,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         b.setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(finished ? "全益採購追蹤｜AI 分析完成" : "全益採購追蹤｜Gemma AI 分析中")
+                .setContentTitle(finished ? "全益採購追蹤｜AI 結果已建立" : "全益採購追蹤｜Gemma AI 分析中")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOnlyAlertOnce(true)
