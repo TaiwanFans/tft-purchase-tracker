@@ -3,16 +3,13 @@
     android:viewportWidth="108" android:viewportHeight="108">
     <path android:fillColor="#0F2A5C" android:pathData="M6,6H102V102H6Z"/>
     <path android:fillColor="#2563EB" android:pathData="M12,12H96V96H12Z"/>
-    <path android:fillColor="#60A5FA" android:pathData="M18,18H90V90H18Z"/>
-    <path android:fillColor="#DBEAFE" android:pathData="M24,24H84V84H24Z"/>
-    <path android:fillColor="#0F2A5C" android:pathData="M48,48H60V60H48Z"/>
-    <path android:fillColor="#FFFFFF" android:pathData="M51,51H57V57H51Z"/>
-    <path android:fillColor="#0F2A5C" android:pathData="M46,26H62V32H68V38H62V44H52V40H46Z"/>
-    <path android:fillColor="#0F2A5C" android:pathData="M64,46H82V62H76V68H70V62H64V52Z"/>
-    <path android:fillColor="#0F2A5C" android:pathData="M46,64H56V68H62V82H46V76H40V70H46Z"/>
-    <path android:fillColor="#0F2A5C" android:pathData="M26,46H44V52H40V58H34V64H26Z"/>
-    <path android:fillColor="#FFFFFF" android:pathData="M50,30H58V34H62V38H58V42H52V38H50Z"/>
-    <path android:fillColor="#FFFFFF" android:pathData="M68,50H78V58H74V62H70V58H68Z"/>
-    <path android:fillColor="#FFFFFF" android:pathData="M50,68H54V72H58V78H50V74H46V70H50Z"/>
-    <path android:fillColor="#FFFFFF" android:pathData="M30,50H40V54H36V58H30Z"/>
+    <path android:fillColor="#E0F2FE" android:pathData="M20,20H88V88H20Z"/>
+    <path android:fillColor="#0F2A5C" android:pathData="M50,44H58V50H64V58H58V64H50V58H44V50H50Z"/>
+    <path android:fillColor="#FFFFFF" android:pathData="M47,24H61V30H67V38H61V44H53V40H47Z"/>
+    <path android:fillColor="#FFFFFF" android:pathData="M64,47H84V61H78V67H70V61H64Z"/>
+    <path android:fillColor="#FFFFFF" android:pathData="M47,64H55V68H61V84H47V78H41V70H47Z"/>
+    <path android:fillColor="#FFFFFF" android:pathData="M24,47H44V53H40V59H34V65H24Z"/>
+    <path android:fillColor="#FACC15" android:pathData="M51,51H57V57H51Z"/>
+    <path android:fillColor="#0F2A5C" android:pathData="M30,74H42V80H30Z"/>
+    <path android:fillColor="#0F2A5C" android:pathData="M66,74H78V80H66Z"/>
 </vector>
