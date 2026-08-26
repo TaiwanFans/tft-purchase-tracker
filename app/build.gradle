@@ -11,8 +11,8 @@ android {
         applicationId 'com.tft.purchase'
         minSdk 24
         targetSdk 35
-        versionCode 8
-        versionName '2.0.6'
+        versionCode 9
+        versionName '2.0.7'
     }
 
     signingConfigs {
@@ -44,8 +44,6 @@ android {
 }
 
 dependencies {
-    // ML Kit remains available only for legacy/manual utilities. Automatic purchase-order filling
-    // in V2.0.6 is Gemma Vision only and does not merge OCR fields.
     implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
     implementation 'androidx.work:work-runtime:2.10.1'
     implementation 'com.google.ai.edge.litertlm:litertlm-android:latest.release'
