@@ -6,7 +6,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -33,13 +32,15 @@ data class AgentUiState(
     val loading: Boolean = false,
     val generating: Boolean = false,
     val controlEnabled: Boolean = false,
+    val safeMode: Boolean = false,
+    val engineWarning: String? = null,
     val runtimeInfo: RuntimeInfo? = null,
     val pendingConfirmation: PendingConfirmation? = null,
     val steps: List<AgentActionStep> = emptyList(),
     val messages: List<ChatMessage> = listOf(
         ChatMessage(
             "assistant",
-            "我是 LocalPilot。第一次只要安裝 AI 模型並開啟手機控制權限，之後我會自動啟動。"
+            "我是 LocalPilot。現在採安全啟動：App 會先正常開啟，只有你按下啟動後才載入本機 AI。"
         )
     ),
     val error: String? = null
@@ -51,15 +52,28 @@ class AgentViewModel(
 
     private val prefs = appContext.getSharedPreferences("agent_app", Context.MODE_PRIVATE)
     private val installer = ModelInstaller(appContext)
-    private val savedModelPath = installer.installedModelPath()
-        ?: prefs.getString("model_path", null)?.takeIf { File(it).exists() }
+    private val bootGuard = EngineBootGuard(appContext)
+
+    private val savedModelPath = runCatching { installer.installedModelPath() }.getOrNull()
+        ?: runCatching { prefs.getString("model_path", null) }.getOrNull()
+            ?.takeIf { path -> runCatching { File(path).exists() && File(path).isFile }.getOrDefault(false) }
+
+    private val previousCrashBackend = bootGuard.crashedBackendIfAny()
 
     private val _state = MutableStateFlow(
         AgentUiState(
             modelPath = savedModelPath,
-            modelSizeBytes = savedModelPath?.let { File(it).length() } ?: 0L,
+            modelSizeBytes = savedModelPath?.let { runCatching { File(it).length() }.getOrDefault(0L) } ?: 0L,
             modelInstallStatus = if (savedModelPath != null) "installed" else "not_installed",
-            controlEnabled = PhoneControlService.instance != null
+            controlEnabled = runCatching { PhoneControlService.instance != null }.getOrDefault(false),
+            safeMode = previousCrashBackend != null,
+            engineWarning = previousCrashBackend?.let {
+                if (it == "GPU") {
+                    "上一次 GPU 啟動途中異常結束。這次已進入 CPU 安全模式，避免重複閃退。"
+                } else {
+                    "上一次 AI 引擎啟動途中異常結束。LocalPilot 已停止自動啟動，請手動重試。"
+                }
+            }
         )
     )
     val state = _state.asStateFlow()
@@ -67,24 +81,24 @@ class AgentViewModel(
     private var agent: LocalAgent? = null
 
     init {
-        val activeDownload = installer.activeDownloadId()
-        when {
-            activeDownload != null -> viewModelScope.launch { monitorModelInstall(activeDownload) }
-            savedModelPath != null -> viewModelScope.launch {
-                delay(350)
-                initialize()
-            }
+        // v0.5 Safe Boot: 絕不在 App 開啟時自動初始化 LiteRT/GPU。
+        // 只允許恢復既有的模型下載監控。
+        val activeDownload = runCatching { installer.activeDownloadId() }.getOrNull()
+        if (activeDownload != null) {
+            viewModelScope.launch { monitorModelInstall(activeDownload) }
         }
     }
 
     fun refreshSystemState() {
-        _state.update { it.copy(controlEnabled = PhoneControlService.instance != null) }
+        _state.update {
+            it.copy(controlEnabled = runCatching { PhoneControlService.instance != null }.getOrDefault(false))
+        }
     }
 
     fun installModel() {
         if (_state.value.modelInstalling) return
 
-        val installed = installer.installedModelPath()
+        val installed = runCatching { installer.installedModelPath() }.getOrNull()
         if (installed != null) {
             prefs.edit().putString("model_path", installed).apply()
             _state.update {
@@ -93,10 +107,10 @@ class AgentViewModel(
                     modelSizeBytes = File(installed).length(),
                     modelInstallStatus = "installed",
                     modelInstallPercent = 100,
+                    modelInstallDetail = "AI 模型已安裝，可手動啟動 LocalPilot。",
                     error = null
                 )
             }
-            initialize()
             return
         }
 
@@ -117,7 +131,7 @@ class AgentViewModel(
     }
 
     fun cancelModelInstall() {
-        installer.cancel()
+        runCatching { installer.cancel() }
         _state.update {
             it.copy(
                 modelInstalling = false,
@@ -167,10 +181,9 @@ class AgentViewModel(
                     modelDownloadedBytes = file.length(),
                     modelTotalBytes = file.length(),
                     modelInstallDetail = "AI 模型已安裝完成",
-                    messages = it.messages + ChatMessage("assistant", "AI 模型已安裝完成，正在自動啟動 LocalPilot。")
+                    messages = it.messages + ChatMessage("assistant", "AI 模型已安裝完成。為了穩定性，請按「啟動 LocalPilot」再載入 AI。")
                 )
             }
-            initialize()
         }.onFailure { t ->
             _state.update {
                 it.copy(
@@ -204,10 +217,9 @@ class AgentViewModel(
                         modelInstallPercent = 100,
                         loading = false,
                         runtimeInfo = null,
-                        messages = it.messages + ChatMessage("assistant", "本機模型已匯入，正在自動啟動 Agent。")
+                        messages = it.messages + ChatMessage("assistant", "本機模型已匯入。請按「啟動 LocalPilot」載入 AI。")
                     )
                 }
-                initialize()
             }.onFailure { fail(it, "模型匯入失敗") }
         }
     }
@@ -216,26 +228,70 @@ class AgentViewModel(
         val path = _state.value.modelPath ?: return
         if (_state.value.loading || _state.value.ready) return
 
+        val preferredBackend = if (_state.value.safeMode) "CPU" else "GPU"
+        // 必須在進 native runtime 前同步落盤；若 native crash，下一次啟動才能偵測。
+        bootGuard.begin(preferredBackend)
+
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null, steps = emptyList()) }
             runCatching {
                 val info = withContext(Dispatchers.IO) {
                     agent?.close()
-                    LocalAgent(appContext, path).also { agent = it }.initialize()
+                    LocalAgent(
+                        context = appContext,
+                        modelPath = path,
+                        preferredBackend = preferredBackend
+                    ).also { agent = it }.initialize()
                 }
+                bootGuard.success(info.backend)
                 _state.update {
                     it.copy(
                         loading = false,
                         ready = true,
+                        safeMode = info.backend == "CPU" && preferredBackend == "CPU",
                         runtimeInfo = info,
                         controlEnabled = PhoneControlService.instance != null,
+                        engineWarning = if (info.backend == "CPU") "目前使用 CPU 相容模式。" else null,
                         messages = it.messages + ChatMessage(
                             "assistant",
                             "Agent 已啟動：${info.backend} · ${if (info.multimodal) "多模態" else "文字模式"}。你現在可以直接交代手機任務。"
                         )
                     )
                 }
-            }.onFailure { fail(it, "Agent 啟動失敗") }
+            }.onFailure {
+                // Kotlin/Java exception 可以正常清掉 marker；只有 native process death 會把 marker 留到下一次。
+                bootGuard.clearInProgress()
+                fail(it, "Agent 啟動失敗")
+            }
+        }
+    }
+
+    fun retryGpuNextTime() {
+        if (_state.value.ready || _state.value.loading) return
+        bootGuard.reset()
+        _state.update {
+            it.copy(
+                safeMode = false,
+                engineWarning = null,
+                error = null
+            )
+        }
+    }
+
+    fun stopAgent() {
+        runCatching { agent?.close() }
+        agent = null
+        bootGuard.clearInProgress()
+        _state.update {
+            it.copy(
+                ready = false,
+                loading = false,
+                generating = false,
+                pendingConfirmation = null,
+                runtimeInfo = null,
+                steps = emptyList(),
+                messages = it.messages + ChatMessage("assistant", "LocalPilot 已停止。你的模型與設定仍保留在手機上。")
+            )
         }
     }
 
@@ -327,7 +383,7 @@ class AgentViewModel(
     }
 
     override fun onCleared() {
-        agent?.close()
+        runCatching { agent?.close() }
         super.onCleared()
     }
 
