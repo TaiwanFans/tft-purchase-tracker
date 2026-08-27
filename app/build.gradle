@@ -10,10 +10,10 @@ android {
 
     defaultConfig {
         applicationId 'com.tft.purchase'
-        minSdk 24
+        minSdk 26
         targetSdk 35
-        versionCode 14
-        versionName '2.0.12'
+        versionCode 15
+        versionName '2.0.13'
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -79,8 +79,16 @@ android {
 }
 
 dependencies {
-    // Bundled Chinese OCR: works offline after APK installation.
+    // Secondary OCR for cross-checking difficult Chinese text.
     implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
     implementation 'androidx.work:work-runtime:2.10.1'
-    // Gemma/LiteRT-LM removed: active vision model is MiniCPM-V 4.6 via llama.cpp JNI.
+
+    // Primary OCR: official PaddleOCR Android SDK, built as an AAR in CI with PP-OCRv6 Small models.
+    implementation files('libs/ppocr-sdk-release.aar')
+    implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.21.1'
+    implementation 'com.quickbirdstudios:opencv:4.5.3'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+    implementation 'androidx.core:core-ktx:1.15.0'
+
+    // MiniCPM-V 4.6 remains the replaceable local VLM through AiModelProvider.
 }
