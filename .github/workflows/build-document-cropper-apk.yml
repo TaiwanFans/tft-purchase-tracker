@@ -30,11 +30,12 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Apply v1.5.0 zoom themes and guided UI
+      - name: Apply v1.5.1 responsive UI filters and performance
         working-directory: android-document-cropper
         run: |
           sed -i "s/^guide box')/'guide box')/" patch_v140.py
           python3 patch_v140.py
+          python3 patch_v151.py
 
       - name: Build debug APK
         working-directory: android-document-cropper
