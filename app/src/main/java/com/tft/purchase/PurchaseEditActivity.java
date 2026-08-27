@@ -25,7 +25,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Manual correction screen. AI pre-fills everything; the user only edits mistakes. */
+/** Manual correction screen. AI pre-fills everything; confirmed edits also improve local recognition knowledge. */
 public class PurchaseEditActivity extends Activity {
     private static final int BG = Color.rgb(245, 248, 255);
     private static final int NAVY = Color.rgb(15, 42, 92);
@@ -69,7 +69,7 @@ public class PurchaseEditActivity extends Activity {
         top.addView(title, new LinearLayout.LayoutParams(0,-2,1));
         page.addView(top);
 
-        page.addView(info("AI 先填，你只修錯的地方", "下方欄位都可以修改。儲存後會立刻更新採購單、交貨提醒與後續功能。人工修改不會被系統自動改回。"), margins(10,10));
+        page.addView(info("AI 先填，你只修錯的地方", "下方欄位都可以修改。儲存後會立刻更新採購單、交貨提醒；你確認過的廠商名稱、地址與常購品項也會加入本機辨識字典。"), margins(10,10));
 
         if (purchase.imagePath != null && !purchase.imagePath.isEmpty() && new File(purchase.imagePath).exists()) {
             ImageView img = new ImageView(this);
@@ -197,8 +197,9 @@ public class PurchaseEditActivity extends Activity {
         purchase.legacyDeliveryDate = earliest;
         db.update(purchase);
         db.replaceItems(purchase.id, items);
+        try { new RecognitionKnowledgeDb(this).learnFromConfirmedPurchase(purchase, items); } catch (Throwable ignored) {}
         try { DriveBackupHelper.backupIfDueAsync(this); } catch (Throwable ignored) {}
-        Toast.makeText(this, "已儲存人工修正，提醒資料已更新", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "已儲存人工修正；廠商與常購品項已更新到本機辨識字典", Toast.LENGTH_LONG).show();
         setResult(RESULT_OK);
         finish();
     }
