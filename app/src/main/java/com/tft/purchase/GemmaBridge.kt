@@ -19,12 +19,19 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.abs
 import kotlin.math.max
 
 /**
- * V2.0.10 on-device Gemma 4 E4B document recognizer.
- * Fixes EXIF orientation before cropping and never discards useful results from the focused passes
- * just because the final verification pass returns empty/invalid JSON.
+ * V2.0.11 fast-path Gemma 4 E4B recognizer.
+ *
+ * Normal documents use only two vision passes:
+ *  1) full-width header (vendor/address/order no/purchase date)
+ *  2) item table
+ * A third repair pass runs only when deterministic checks find missing or contradictory data.
+ *
+ * GPU initialization fallback is separated from inference errors so a mid-inference exception no
+ * longer causes the entire document to be repeated from the beginning on slow CPU.
  */
 object GemmaBridge {
     private val lock = Any()
@@ -34,6 +41,16 @@ object GemmaBridge {
 
     @JvmStatic
     fun isReady(context: Context): Boolean = GemmaModelManager.isReady(context)
+
+    @JvmStatic
+    fun warmUpAsync(context: Context) {
+        val app = context.applicationContext
+        if (!GemmaModelManager.isReady(app)) return
+        if (engine?.isInitialized() == true) return
+        Thread {
+            try { obtainGpuEngine(app, GemmaModelManager.modelFile(app)) } catch (_: Throwable) {}
+        }.start()
+    }
 
     @JvmStatic
     fun analyze(context: Context, imagePath: String, ocrText: String, callback: GemmaAiCallback) {
@@ -49,48 +66,44 @@ object GemmaBridge {
     ) {
         val app = context.applicationContext
         Thread {
+            var temporaryCpu: Engine? = null
             try {
-                val model = GemmaModelManager.modelFile(app)
                 if (!GemmaModelManager.isReady(app)) {
-                    throw IllegalStateException("Gemma 4 E4B 尚未完整下載並驗證；請先到模型安裝頁完成下載")
+                    throw IllegalStateException("Gemma 4 E4B 尚未完整下載並驗證")
                 }
-                notifyProgress(progress, 4, "校正照片方向並準備高解析區域")
-                val e = obtainEngine(app, model)
-                val response = runAdvanced(e, app, imagePath, progress)
+                val model = GemmaModelManager.modelFile(app)
+                notifyProgress(progress, 3, "準備 Gemma 4 E4B 高速模式")
+
+                val selected: Engine
+                val gpu = try {
+                    obtainGpuEngine(app, model)
+                } catch (_: Throwable) {
+                    null
+                }
+
+                if (gpu != null) {
+                    selected = gpu
+                    notifyProgress(progress, 8, "GPU 高速引擎已就緒")
+                } else {
+                    notifyProgress(progress, 8, "GPU 無法初始化，使用 CPU 相容模式（較慢）")
+                    temporaryCpu = createCpuEngine(app, model)
+                    selected = temporaryCpu!!
+                }
+
+                // Important: inference errors do NOT restart the whole document on CPU.
+                val response = runFast(selected, app, imagePath, progress)
                 main.post { callback.onSuccess(response) }
-            } catch (gpuError: Throwable) {
-                try {
-                    synchronized(lock) {
-                        try { engine?.close() } catch (_: Throwable) {}
-                        engine = null
-                        engineModelPath = null
-                    }
-                    notifyProgress(progress, 7, "GPU 無法使用，切換 CPU AI")
-                    val model = GemmaModelManager.modelFile(app)
-                    if (!GemmaModelManager.isReady(app)) {
-                        throw IllegalStateException("Gemma 4 E4B 模型未通過完整性驗證")
-                    }
-                    val cpuConfig = EngineConfig(
-                        modelPath = model.absolutePath,
-                        backend = Backend.CPU(threadCount = 4),
-                        visionBackend = Backend.CPU(threadCount = 4),
-                        maxNumImages = 1,
-                        cacheDir = File(app.cacheDir, "gemma_e4b_cpu_v210").apply { mkdirs() }.absolutePath
-                    )
-                    val cpu = Engine(cpuConfig)
-                    cpu.initialize()
-                    val response = cpu.use { runAdvanced(it, app, imagePath, progress) }
-                    main.post { callback.onSuccess(response) }
-                } catch (cpuError: Throwable) {
-                    val msg = "Gemma 4 E4B 分析失敗：" +
-                        (cpuError.message ?: gpuError.message ?: cpuError.javaClass.simpleName)
-                    main.post { callback.onFailure(msg) }
-                }
+            } catch (error: Throwable) {
+                val msg = "Gemma 4 E4B 分析失敗：" +
+                    (error.message ?: error.javaClass.simpleName)
+                main.post { callback.onFailure(msg) }
+            } finally {
+                try { temporaryCpu?.close() } catch (_: Throwable) {}
             }
         }.start()
     }
 
-    private fun runAdvanced(
+    private fun runFast(
         e: Engine,
         context: Context,
         imagePath: String,
@@ -98,51 +111,48 @@ object GemmaBridge {
     ): String {
         val prepared = prepareImages(context, imagePath)
         try {
-            notifyProgress(progress, 15, "AI 放大辨識供應廠商與地址")
-            val vendor = send(
+            notifyProgress(progress, 18, "第 1/2 階段：辨識廠商、單號與採購日期")
+            val headerRaw = send(
                 e,
-                prepared.vendor.absolutePath,
-                vendorPrompt(),
-                "你是台灣採購單左上表頭辨識器。只抄圖片可見文字，不推測、不改寫。",
-                650
+                prepared.header.absolutePath,
+                headerPrompt(),
+                "你是固定格式台灣採購單表頭辨識器。只抄圖片可見資料，不推測、不改寫。",
+                450
             )
 
-            notifyProgress(progress, 31, "AI 放大辨識採購單號與採購日期")
-            val order = send(
-                e,
-                prepared.order.absolutePath,
-                orderPrompt(),
-                "你是台灣採購單右上編號日期辨識器。逐位抄寫數字；看不清就留空。",
-                550
-            )
-
-            notifyProgress(progress, 49, "AI 放大逐列辨識品項與數量")
-            val table = send(
+            notifyProgress(progress, 50, "第 2/2 階段：辨識品項、數量與交貨日")
+            val tableRaw = send(
                 e,
                 prepared.table.absolutePath,
                 tablePrompt(),
-                "你是固定格式採購單表格辨識器。只讀正式表格列；每個數字都要從欄位位置確認。",
-                2000
+                "你是固定格式採購單表格辨識器。只讀正式品項列，每個數字都要依欄位位置確認。",
+                1300
             )
 
-            // Deterministically preserve the focused-pass data before asking the model to verify.
-            val focused = mergeFocusedPasses(vendor, order, table)
+            val focused = mergePasses(headerRaw, tableRaw)
+            notifyProgress(progress, 82, "程式快速檢查單號、日期、數量與金額")
 
-            notifyProgress(progress, 75, "AI 用上半頁交叉核對")
-            val candidate = "FOCUSED_CANDIDATE:\n${focused.toString()}"
-            val finalResponse = send(
+            if (!needsRepair(focused)) {
+                notifyProgress(progress, 96, "快速辨識完成，不需要第二次稽核")
+                return focused.toString()
+            }
+
+            // Only difficult documents pay the cost of a third vision pass.
+            notifyProgress(progress, 84, "偵測到疑問欄位，AI 只補強一次")
+            val repairRaw = send(
                 e,
                 prepared.verify.absolutePath,
-                verifyPrompt(candidate),
-                "你是採購單資料稽核器。圖片才是真實來源；候選資料只供核對。禁止補不存在的字或數字。",
-                2400
+                repairPrompt(focused.toString()),
+                "你是採購單資料修復器。圖片是唯一真實來源；只修正缺漏或矛盾欄位，禁止創造資料。",
+                1300
             )
-            notifyProgress(progress, 93, "程式檢查單號、日期與金額一致性")
-
-            // A final verifier occasionally emits empty/invalid JSON. Do not throw away the three
-            // useful high-resolution passes in that case.
-            val verified = extractJson(finalResponse)
-            return if (verified != null && hasUsefulData(verified)) verified.toString() else focused.toString()
+            val repaired = extractJson(repairRaw)
+            notifyProgress(progress, 96, "補強完成並合併可信資料")
+            return if (repaired != null && hasUsefulData(repaired)) {
+                mergeRepair(focused, repaired).toString()
+            } else {
+                focused.toString()
+            }
         } finally {
             prepared.cleanup()
         }
@@ -151,7 +161,7 @@ object GemmaBridge {
     private fun send(e: Engine, imagePath: String, prompt: String, system: String, maxTokens: Int): String {
         val config = ConversationConfig(
             systemInstruction = Contents.of(system),
-            samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0, seed = 29),
+            samplerConfig = SamplerConfig(topK = 1, topP = 1.0, temperature = 0.0, seed = 31),
             maxOutputToken = maxTokens
         )
         return e.createConversation(config).use { conv ->
@@ -164,18 +174,68 @@ object GemmaBridge {
         }
     }
 
-    private fun mergeFocusedPasses(vendorRaw: String, orderRaw: String, tableRaw: String): JSONObject {
-        val vendor = extractJson(vendorRaw)
-        val order = extractJson(orderRaw)
+    private fun mergePasses(headerRaw: String, tableRaw: String): JSONObject {
+        val header = extractJson(headerRaw)
         val table = extractJson(tableRaw)
         val out = JSONObject()
-        out.put("vendor", vendor?.optString("vendor", "") ?: "")
-        out.put("location", vendor?.optString("location", "") ?: "")
-        out.put("order_no", order?.optString("order_no", "") ?: "")
-        out.put("purchase_date", order?.optString("purchase_date", "") ?: "")
-        val items = table?.optJSONArray("items") ?: JSONArray()
-        out.put("items", items)
+        out.put("vendor", header?.optString("vendor", "") ?: "")
+        out.put("location", header?.optString("location", "") ?: "")
+        out.put("order_no", header?.optString("order_no", "") ?: "")
+        out.put("purchase_date", header?.optString("purchase_date", "") ?: "")
+        out.put("items", table?.optJSONArray("items") ?: JSONArray())
         return out
+    }
+
+    private fun mergeRepair(focused: JSONObject, repaired: JSONObject): JSONObject {
+        val out = JSONObject()
+        for (key in arrayOf("vendor", "location", "order_no", "purchase_date")) {
+            val repairValue = repaired.optString(key, "").trim()
+            val baseValue = focused.optString(key, "").trim()
+            out.put(key, if (repairValue.isNotEmpty()) repairValue else baseValue)
+        }
+        val repairedItems = repaired.optJSONArray("items")
+        val focusedItems = focused.optJSONArray("items") ?: JSONArray()
+        out.put("items", if (repairedItems != null && repairedItems.length() > 0) repairedItems else focusedItems)
+        return out
+    }
+
+    private fun needsRepair(o: JSONObject): Boolean {
+        if (o.optString("vendor", "").isBlank()) return true
+        if (o.optString("order_no", "").isBlank()) return true
+        if (o.optString("purchase_date", "").isBlank()) return true
+
+        val items = o.optJSONArray("items") ?: return true
+        if (items.length() == 0) return true
+
+        val orderDigits = o.optString("order_no", "").filter { it.isDigit() }
+        val dateDigits = o.optString("purchase_date", "").filter { it.isDigit() }
+        if (orderDigits.length >= 8 && dateDigits.length == 8 && orderDigits.substring(0, 8) != dateDigits) {
+            return true
+        }
+
+        for (i in 0 until items.length()) {
+            val item = items.optJSONObject(i) ?: return true
+            if (item.optString("description", "").isBlank()) return true
+            if (item.optString("quantity", "").isBlank()) return true
+            if (item.optString("delivery_date", "").isBlank()) return true
+
+            val q = parseNumber(item.optString("quantity", ""))
+            val unitPrice = parseNumber(item.optString("unit_price", ""))
+            val subtotal = parseNumber(item.optString("subtotal", ""))
+            if (q != null && unitPrice != null && subtotal != null && subtotal != 0.0) {
+                val expected = q * unitPrice
+                val tolerance = max(1.0, abs(subtotal) * 0.015)
+                if (abs(expected - subtotal) > tolerance) return true
+            }
+        }
+        return false
+    }
+
+    private fun parseNumber(value: String?): Double? {
+        if (value.isNullOrBlank()) return null
+        val cleaned = value.replace(",", "").replace(Regex("[^0-9.\\-]"), "")
+        if (cleaned.isBlank() || cleaned == "-" || cleaned == ".") return null
+        return cleaned.toDoubleOrNull()
     }
 
     private fun extractJson(raw: String?): JSONObject? {
@@ -193,83 +253,61 @@ object GemmaBridge {
         return (o.optJSONArray("items")?.length() ?: 0) > 0
     }
 
-    private fun vendorPrompt(): String = """
-這是採購單左上區域。只輸出 JSON：
-{"vendor":"","location":""}
-規則：
-- vendor：只抄「供應廠商」標籤右側，到該行結束；括號內廠商代碼也保留。
-- location：只抄「廠商地址」標籤右側，到該行結束。
-- 不要抄最上方本公司名稱、電話或回送地址。
-- 不要改正公司名稱，不要把看不清楚的中文字猜成常見公司名。
-- 看不到就輸出空字串。
-""".trimIndent()
+    private fun headerPrompt(): String = """
+這是採購單上方表頭的放大圖片。只輸出 JSON，不要說明：
+{"vendor":"","location":"","order_no":"","purchase_date":""}
 
-    private fun orderPrompt(): String = """
-這是採購單右上區域。只輸出 JSON：
-{"order_no":"","purchase_date":""}
 規則：
-- order_no：只抄「採購單號」右側完整數字，逐位檢查。此版型通常為 YYYYMMDD + 4 碼流水號，共 12 碼。
-- purchase_date：只抄「採購日期」右側日期，輸出 YYYY-MM-DD。
-- 不得把聯絡人、電話、交貨日期當採購單號或採購日期。
-- 若某位數字模糊就留空，不要猜 0/8、1/7、3/8。
+- vendor：只取「供應廠商」右側內容，括號代碼保留，不要取本公司名稱。
+- location：只取「廠商地址」右側內容。
+- order_no：只取右上「採購單號」完整數字，通常為 12 碼 YYYYMMDD+4碼流水號。
+- purchase_date：只取右上「採購日期」，輸出 YYYY-MM-DD。
+- 不要把電話、聯絡人、交貨日期當成上述欄位。
+- 看不清楚就留空，禁止猜字或補數字。
 """.trimIndent()
 
     private fun tablePrompt(): String = """
-這是採購單正式品項表格的放大區域。只輸出 JSON：
-{
-  "items":[
-    {"line_no":"001","description":"","quantity":"","unit":"","unit_price":"","subtotal":"","delivery_date":"","note":""}
-  ]
-}
+這是採購單正式品項表格的放大圖片。只輸出 JSON，不要說明：
+{"items":[{"line_no":"001","description":"","quantity":"","unit":"","unit_price":"","subtotal":"","delivery_date":"","note":""}]}
 
-只能讀表頭「項次／品名規格明細／數量／單位／單價／小計／交貨日期／備註」下方的正式資料列。
-強制規則：
-- 只有左欄真的出現 001、002、003… 才能建立品項。
-- 「以下空白」不是品項；即使它有項次也必須排除。
-- description 必須取同一列品名規格文字；同列換行可合併，不能跨列。
-- quantity 必須從「數量」欄逐位完整抄寫，例如 200、1200 絕不能少尾端 0。
-- unit、unit_price、subtotal、delivery_date、note 都必須取同一水平資料列。
+只讀「項次／品名規格明細／數量／單位／單價／小計／交貨日期／備註」正式資料列。
+規則：
+- 只有左欄真的看到 001、002、003… 才能建立品項。
+- 「以下空白」、本頁小計、稅額、總計、FAXED、印章、頁尾條款全部排除。
+- description 只取同一列品名規格；同列換行可合併，不可跨列。
+- quantity 必須逐位完整抄寫，200 不可變成 2，1200 不可變成 12。
+- unit、unit_price、subtotal、delivery_date、note 必須取同一水平列。
 - delivery_date 輸出 YYYY-MM-DD。
-- 如果 quantity × unit_price 與 subtotal 明顯不相等，先重新看數量欄與單價欄，不要自行算一個新數字。
-- FAXED、印章、頁尾條款、本頁小計、稅額、總計、公司機密文字全部不是品項。
-- 看不清楚的欄位留空，不要用上下列內容猜補。
+- 看不清楚欄位留空，不要使用相鄰列猜補。
 """.trimIndent()
 
-    private fun verifyPrompt(candidate: String): String = """
-這張圖片保留採購單的重要區域。以下是三個放大區域得到的候選資料；候選可能有錯，請重新對照圖片。
-
+    private fun repairPrompt(candidate: String): String = """
+這是前兩次快速辨識的候選資料：
 $candidate
 
-只輸出最終 JSON：
-{
-  "vendor":"",
-  "location":"",
-  "order_no":"",
-  "purchase_date":"",
-  "items":[
-    {"line_no":"001","description":"","quantity":"","unit":"","unit_price":"","subtotal":"","delivery_date":"","note":""}
-  ]
-}
+程式發現候選中至少一個欄位缺漏或互相矛盾。請對照圖片，只修正真正有問題的地方，輸出完整 JSON：
+{"vendor":"","location":"","order_no":"","purchase_date":"","items":[{"line_no":"001","description":"","quantity":"","unit":"","unit_price":"","subtotal":"","delivery_date":"","note":""}]}
 
-稽核規則：
-1. vendor/location 只能來自左上「供應廠商／廠商地址」。
-2. order_no 只能來自右上「採購單號」。若為 12 碼，前 8 碼通常應等於 purchase_date 的 YYYYMMDD；不一致時重新看右上區，不要硬改成合理數字。
-3. purchase_date 只能來自右上「採購日期」，不是任何品項的交貨日期。
-4. items 只接受正式表格列；「以下空白」與頁尾說明永遠排除。
-5. quantity 要保留完整位數。若候選為 2，但圖片欄位看起來是 200，必須輸出 200。
-6. 同列 quantity、unit_price、subtotal 都清楚時，用乘法檢查；若不合，重新辨識該列數字。
-7. delivery_date 只能來自同列「交貨日期」欄。
-8. 看不清楚就留空；不要創造公司名、品項、數字或日期。
-9. 不要輸出 Markdown、說明文字或 ```，只能輸出 JSON object。
+檢查重點：
+1. 採購單號只能來自右上「採購單號」；12 碼時前 8 碼通常應與採購日期 YYYYMMDD 一致。
+2. 數量必須完整保留位數。
+3. quantity × unit_price 與 subtotal 若明顯不符，重新看該列數字。
+4. delivery_date 只能來自同一列交貨日期欄。
+5. 「以下空白」及頁尾說明永遠不是品項。
+6. 圖片看不到的內容留空，禁止創造資料。
+7. 只能輸出 JSON object，不要 Markdown。
 """.trimIndent()
 
-    private fun obtainEngine(context: Context, model: File): Engine {
+    private fun obtainGpuEngine(context: Context, model: File): Engine {
         synchronized(lock) {
             val existing = engine
             if (existing != null && existing.isInitialized() && engineModelPath == model.absolutePath) return existing
             try { existing?.close() } catch (_: Throwable) {}
+            engine = null
+            engineModelPath = null
+
             Engine.setNativeMinLogSeverity(LogSeverity.ERROR)
-            val cache = File(context.cacheDir, "gemma_e4b_gpu_v210").apply { mkdirs() }
+            val cache = File(context.cacheDir, "gemma_e4b_gpu_v211").apply { mkdirs() }
             val config = EngineConfig(
                 modelPath = model.absolutePath,
                 backend = Backend.GPU(),
@@ -285,10 +323,21 @@ $candidate
         }
     }
 
-    private data class PreparedImages(val vendor: File, val order: File, val table: File, val verify: File) {
+    private fun createCpuEngine(context: Context, model: File): Engine {
+        val cache = File(context.cacheDir, "gemma_e4b_cpu_v211").apply { mkdirs() }
+        val config = EngineConfig(
+            modelPath = model.absolutePath,
+            backend = Backend.CPU(threadCount = 4),
+            visionBackend = Backend.CPU(threadCount = 4),
+            maxNumImages = 1,
+            cacheDir = cache.absolutePath
+        )
+        return Engine(config).also { it.initialize() }
+    }
+
+    private data class PreparedImages(val header: File, val table: File, val verify: File) {
         fun cleanup() {
-            try { vendor.delete() } catch (_: Throwable) {}
-            try { order.delete() } catch (_: Throwable) {}
+            try { header.delete() } catch (_: Throwable) {}
             try { table.delete() } catch (_: Throwable) {}
             try { verify.delete() } catch (_: Throwable) {}
         }
@@ -298,22 +347,19 @@ $candidate
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(imagePath, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw IllegalArgumentException("無法解碼採購單圖片")
+
         var sample = 1
-        while (bounds.outWidth / sample > 4000 || bounds.outHeight / sample > 5000) sample *= 2
+        while (bounds.outWidth / sample > 3400 || bounds.outHeight / sample > 4400) sample *= 2
         val opts = BitmapFactory.Options().apply { inSampleSize = sample }
         var bm = BitmapFactory.decodeFile(imagePath, opts) ?: throw IllegalArgumentException("無法載入採購單圖片")
-
-        // Pixel/Google Photos often stores camera pixels rotated and relies on EXIF orientation.
-        // BitmapFactory does NOT apply that metadata, so crop coordinates were previously wrong.
         bm = applyExifOrientation(bm, imagePath)
-
-        // This company's purchase order is portrait A4. If metadata is absent but pixels are still
-        // landscape, normalize to portrait before applying fixed-layout crops.
         if (bm.width > bm.height) bm = rotateBitmap(bm, 90f)
 
+        // 3200px is enough for the fixed A4 form after focused cropping and substantially reduces
+        // image preprocessing/prefill versus repeatedly feeding 4000px crops.
         val maxSide = max(bm.width, bm.height)
-        if (maxSide > 4000) {
-            val scale = 4000f / maxSide.toFloat()
+        if (maxSide > 3200) {
+            val scale = 3200f / maxSide.toFloat()
             val scaled = Bitmap.createScaledBitmap(
                 bm,
                 max(1, (bm.width * scale).toInt()),
@@ -324,45 +370,30 @@ $candidate
             bm = scaled
         }
 
-        val dir = File(context.cacheDir, "gemma_doc_parts_v210").apply { mkdirs() }
+        val dir = File(context.cacheDir, "gemma_doc_parts_v211").apply { mkdirs() }
         val tag = System.nanoTime().toString()
-        val vendorFile = File(dir, "vendor_$tag.jpg")
-        val orderFile = File(dir, "order_$tag.jpg")
+        val headerFile = File(dir, "header_$tag.jpg")
         val tableFile = File(dir, "table_$tag.jpg")
         val verifyFile = File(dir, "verify_$tag.jpg")
 
-        // Left header: supplier and address. Keep a little more margin to tolerate hand-held framing.
-        val vendorY = (bm.height * 0.025f).toInt().coerceAtLeast(0)
-        val vendorW = (bm.width * 0.74f).toInt().coerceAtMost(bm.width)
-        val vendorBottom = (bm.height * 0.31f).toInt().coerceAtMost(bm.height)
-        val vendorBm = Bitmap.createBitmap(bm, 0, vendorY, vendorW, max(1, vendorBottom - vendorY))
-        saveJpeg(vendorBm, vendorFile)
-        vendorBm.recycle()
+        val headerBottom = (bm.height * 0.32f).toInt().coerceAtMost(bm.height)
+        val headerBm = Bitmap.createBitmap(bm, 0, 0, bm.width, max(1, headerBottom))
+        saveJpegResized(headerBm, headerFile, 2100)
+        headerBm.recycle()
 
-        // Right header: PO number and purchase date.
-        val orderX = (bm.width * 0.48f).toInt().coerceAtLeast(0)
-        val orderY = (bm.height * 0.025f).toInt().coerceAtLeast(0)
-        val orderW = max(1, bm.width - orderX)
-        val orderBottom = (bm.height * 0.31f).toInt().coerceAtMost(bm.height)
-        val orderBm = Bitmap.createBitmap(bm, orderX, orderY, orderW, max(1, orderBottom - orderY))
-        saveJpeg(orderBm, orderFile)
-        orderBm.recycle()
-
-        // Table: preserve more rows than V2.0.9, while excluding most page-footer terms.
         val tableTop = (bm.height * 0.13f).toInt().coerceAtLeast(0)
         val tableBottom = (bm.height * 0.72f).toInt().coerceAtMost(bm.height)
         val tableBm = Bitmap.createBitmap(bm, 0, tableTop, bm.width, max(1, tableBottom - tableTop))
-        saveJpeg(tableBm, tableFile)
+        saveJpegResized(tableBm, tableFile, 2200)
         tableBm.recycle()
 
-        // Verification sees the full header + all likely product rows, but not the legal footer.
         val verifyBottom = (bm.height * 0.74f).toInt().coerceAtMost(bm.height)
         val verifyBm = Bitmap.createBitmap(bm, 0, 0, bm.width, max(1, verifyBottom))
-        saveJpeg(verifyBm, verifyFile)
+        saveJpegResized(verifyBm, verifyFile, 2200)
         verifyBm.recycle()
         bm.recycle()
 
-        return PreparedImages(vendorFile, orderFile, tableFile, verifyFile)
+        return PreparedImages(headerFile, tableFile, verifyFile)
     }
 
     private fun applyExifOrientation(source: Bitmap, imagePath: String): Bitmap {
@@ -373,9 +404,7 @@ $candidate
                 ExifInterface.ORIENTATION_ROTATE_270 -> 270f
                 else -> 0f
             }
-        } catch (_: Throwable) {
-            0f
-        }
+        } catch (_: Throwable) { 0f }
         return if (degrees == 0f) source else rotateBitmap(source, degrees)
     }
 
@@ -386,9 +415,25 @@ $candidate
         return rotated
     }
 
-    private fun saveJpeg(bm: Bitmap, file: File) {
-        FileOutputStream(file).use { out ->
-            if (!bm.compress(Bitmap.CompressFormat.JPEG, 100, out)) throw IllegalStateException("影像轉換失敗")
+    private fun saveJpegResized(source: Bitmap, file: File, maxWidth: Int) {
+        var output = source
+        if (source.width > maxWidth) {
+            val scale = maxWidth.toFloat() / source.width.toFloat()
+            output = Bitmap.createScaledBitmap(
+                source,
+                maxWidth,
+                max(1, (source.height * scale).toInt()),
+                true
+            )
+        }
+        try {
+            FileOutputStream(file).use { out ->
+                if (!output.compress(Bitmap.CompressFormat.JPEG, 93, out)) {
+                    throw IllegalStateException("影像轉換失敗")
+                }
+            }
+        } finally {
+            if (output !== source) output.recycle()
         }
     }
 
