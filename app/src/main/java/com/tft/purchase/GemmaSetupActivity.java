@@ -30,6 +30,7 @@ public class GemmaSetupActivity extends Activity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         AiModelRegistry.setActive(this, AiModelRegistry.MINICPM_V46);
+        try { PlayServicesModuleManager.prefetch(this); } catch (Throwable ignored) {}
         render();
         refresh();
     }
@@ -60,7 +61,7 @@ public class GemmaSetupActivity extends Activity {
         tt.setOrientation(LinearLayout.VERTICAL);
         tt.setPadding(dp(12), 0, 0, 0);
         tt.addView(label("全益採購追蹤", 27, Color.rgb(15,42,92), true));
-        tt.addView(label("MiniCPM-V 4.6 + ML Kit OCR｜本機辨識", 14, Color.rgb(37,99,235), true));
+        tt.addView(label("PP-OCRv6 Medium + ML Kit + MiniCPM｜離線辨識", 14, Color.rgb(37,99,235), true));
         titleRow.addView(tt, new LinearLayout.LayoutParams(0, -2, 1));
         root.addView(titleRow);
 
@@ -72,10 +73,10 @@ public class GemmaSetupActivity extends Activity {
         cp.setMargins(0, dp(20), 0, dp(14));
         root.addView(card, cp);
 
-        card.addView(label("V2.0.12｜AI 引擎更換", 18, Color.rgb(15,42,92), true));
-        card.addView(label("辨識流程已改成：Google ML Kit 中文 OCR 先讀文字 → MiniCPM-V 4.6 同時看原圖與 OCR → 輸出採購資料 → 你可確認或修改後存入原本資料庫。", 15, Color.rgb(71,85,105), false));
-        card.addView(label("MiniCPM-V 4.6 使用官方 GGUF + llama.cpp Android 本機推論。主模型約 0.53 GB，視覺模型約 1.11 GB，合計約 1.6 GB；下載完成後可離線辨識，不使用付費 AI API。", 14, Color.rgb(22,101,52), true));
-        card.addView(label("舊 Gemma 模型不再是目前辨識引擎。開始下載 MiniCPM 時會清理舊 Gemma 模型檔，釋放手機空間。", 13, Color.rgb(100,116,139), false));
+        card.addView(label("V2.0.14｜高精度離線文件辨識", 18, Color.rgb(15,42,92), true));
+        card.addView(label("PP-OCRv6 Medium 已直接包在 APP 裡，負責主要中文字與數字辨識；Google Play services 會在第一次有網路時預先下載中文 OCR 與文件掃描模組，之後可離線使用。", 15, Color.rgb(71,85,105), false));
+        card.addView(label("拍照／相簿會優先進 Google 文件掃描器做自動邊界、旋轉、裁切、濾鏡與清理，再由 PP-OCRv6 Medium + 兩次 ML Kit OCR 交叉核對，最後才讓 MiniCPM-V 4.6 整理欄位。", 14, Color.rgb(22,101,52), true));
+        card.addView(label("MiniCPM-V 4.6 主模型約 0.53 GB，視覺模型約 1.11 GB，合計約 1.6 GB；下載完成後不需要付費 AI API。", 13, Color.rgb(100,116,139), false));
 
         status = label("檢查 MiniCPM-V 4.6 模型中…", 15, Color.rgb(71,85,105), false);
         root.addView(status);
@@ -88,8 +89,9 @@ public class GemmaSetupActivity extends Activity {
         download = button("下載 MiniCPM-V 4.6（約 1.6 GB）", Color.rgb(37,99,235));
         download.setOnClickListener(v -> {
             try {
+                PlayServicesModuleManager.prefetch(this);
                 MiniCpmV46ModelManager.startDownload(this);
-                Toast.makeText(this, "MiniCPM-V 4.6 已開始下載；可在這裡查看真實進度", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "MiniCPM-V 4.6 已開始下載；Google 離線掃描/OCR 模組也會同步準備", Toast.LENGTH_LONG).show();
                 refresh();
             } catch (Exception e) {
                 Toast.makeText(this, "下載啟動失敗：" + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -100,7 +102,7 @@ public class GemmaSetupActivity extends Activity {
         enter = button("進入 APP（僅查看既有資料）", Color.rgb(71,85,105));
         enter.setOnClickListener(v -> openMain());
         root.addView(enter, margins(8,6));
-        root.addView(label("模型尚未完成時仍可查看、搜尋、編輯既有採購資料與提醒；新增／重新 AI 分析需等模型驗證通過。", 13, Color.rgb(100,116,139), false));
+        root.addView(label("建議第一次安裝時保持 Wi-Fi，先完成 MiniCPM 下載，並讓 Google Play services 把文件掃描與中文 OCR 模組準備好。之後在沒有網路的工廠環境仍可用 PP-OCR + 本機 AI。", 13, Color.rgb(100,116,139), false));
         setContentView(root);
     }
 
@@ -113,19 +115,19 @@ public class GemmaSetupActivity extends Activity {
 
     private void refresh() {
         if (MiniCpmV46ModelManager.isReady(this)) {
-            status.setText("MiniCPM-V 4.6 已就緒 ✓\nML Kit OCR + 圖片 AI 可離線使用");
+            status.setText("MiniCPM-V 4.6 已就緒 ✓\nPP-OCRv6 Medium 已內建 ✓\n" + PlayServicesModuleManager.status(this));
             status.setTextColor(Color.rgb(22,163,74));
             progress.setProgress(100);
-            download.setText("MiniCPM-V 4.6 已就緒");
+            download.setText("本機 AI 模型已就緒");
             download.setEnabled(false);
-            enter.setText("進入 APP（AI 已就緒）");
+            enter.setText("進入 APP（高精度離線辨識已就緒）");
             enter.setEnabled(true);
             return;
         }
 
         MiniCpmV46ModelManager.Status s = MiniCpmV46ModelManager.getStatus(this);
         if (validating) {
-            status.setText("兩個模型檔已下載完成，正在核對官方 MD5…\n驗證約 1.6 GB 檔案需要一些時間，請稍候。");
+            status.setText("兩個 MiniCPM 模型檔已下載完成，正在核對官方 MD5…\n驗證約 1.6 GB 檔案需要一些時間，請稍候。\n" + PlayServicesModuleManager.status(this));
             status.setTextColor(Color.rgb(202,138,4));
             progress.setProgress(100);
             download.setEnabled(false);
@@ -136,7 +138,7 @@ public class GemmaSetupActivity extends Activity {
         if (s.state == DownloadManager.STATUS_RUNNING || s.state == DownloadManager.STATUS_PENDING || s.state == DownloadManager.STATUS_PAUSED) {
             int p = s.percent();
             progress.setProgress(p);
-            status.setText("MiniCPM-V 4.6 下載中：" + p + "%\n已下載 " + gb(s.downloaded) + " / " + gb(s.total) + " GB\n主模型與視覺模型會同時下載。");
+            status.setText("MiniCPM-V 4.6 下載中：" + p + "%\n已下載 " + gb(s.downloaded) + " / " + gb(s.total) + " GB\n" + PlayServicesModuleManager.status(this));
             status.setTextColor(Color.rgb(71,85,105));
             download.setText("下載進行中…");
             download.setEnabled(false);
@@ -145,7 +147,7 @@ public class GemmaSetupActivity extends Activity {
         }
 
         if (s.state == DownloadManager.STATUS_SUCCESSFUL && s.needsValidation) {
-            status.setText("下載 100% 完成，準備驗證 MiniCPM 模型…");
+            status.setText("下載 100% 完成，準備驗證 MiniCPM 模型…\n" + PlayServicesModuleManager.status(this));
             progress.setProgress(100);
             download.setEnabled(false);
             startValidation();
@@ -155,7 +157,7 @@ public class GemmaSetupActivity extends Activity {
         if ((s.validationError != null && !s.validationError.isEmpty()) || s.state == DownloadManager.STATUS_FAILED) {
             String err = s.validationError != null && !s.validationError.isEmpty()
                     ? s.validationError : "Android 下載失敗，錯誤碼：" + s.reason;
-            status.setText("MiniCPM 模型目前不可使用：\n" + err + "\n請重新下載。");
+            status.setText("MiniCPM 模型目前不可使用：\n" + err + "\n請重新下載。\n" + PlayServicesModuleManager.status(this));
             status.setTextColor(Color.rgb(220,38,38));
             progress.setProgress(0);
             download.setText("重新下載 MiniCPM-V 4.6");
@@ -164,7 +166,7 @@ public class GemmaSetupActivity extends Activity {
             return;
         }
 
-        status.setText("MiniCPM-V 4.6 尚未安裝\n需要下載約 1.6 GB，完成後所有 OCR + AI 辨識都在手機本機執行。");
+        status.setText("MiniCPM-V 4.6 尚未安裝\n需要下載約 1.6 GB。PP-OCRv6 Medium 已經包含在 APK 裡。\n" + PlayServicesModuleManager.status(this));
         status.setTextColor(Color.rgb(71,85,105));
         progress.setProgress(0);
         download.setText("下載 MiniCPM-V 4.6（約 1.6 GB）");
@@ -186,7 +188,7 @@ public class GemmaSetupActivity extends Activity {
     }
 
     private void openMain() {
-        Intent i = new Intent(this, AiMainActivity.class);
+        Intent i = new Intent(this, EnhancedAiMainActivity.class);
         i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(i);
         finish();
