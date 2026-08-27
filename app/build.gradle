@@ -12,8 +12,8 @@ android {
         applicationId 'com.tft.purchase'
         minSdk 26
         targetSdk 35
-        versionCode 15
-        versionName '2.0.13'
+        versionCode 16
+        versionName '2.0.14'
 
         ndk {
             abiFilters 'arm64-v8a'
@@ -79,16 +79,19 @@ android {
 }
 
 dependencies {
-    // Secondary OCR for cross-checking difficult Chinese text.
-    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
     implementation 'androidx.work:work-runtime:2.10.1'
+    implementation 'androidx.core:core-ktx:1.15.0'
 
-    // Primary OCR: official PaddleOCR Android SDK, built as an AAR in CI with PP-OCRv6 Small models.
+    // Google Play services modules: first online setup can download/update them; afterwards they work locally.
+    implementation 'com.google.android.gms:play-services-base:18.10.0'
+    implementation 'com.google.android.gms:play-services-mlkit-text-recognition-chinese:16.0.1'
+    implementation 'com.google.android.gms:play-services-mlkit-document-scanner:16.0.0'
+
+    // Primary OCR: official PaddleOCR Android SDK. CI bundles PP-OCRv6 Medium models into this AAR.
     implementation files('libs/ppocr-sdk-release.aar')
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.21.1'
     implementation 'com.quickbirdstudios:opencv:4.5.3'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
-    implementation 'androidx.core:core-ktx:1.15.0'
 
     // MiniCPM-V 4.6 remains the replaceable local VLM through AiModelProvider.
 }
