@@ -1,21 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
-        android:allowBackup="false"
+        android:name=".TftApplication"
+        android:allowBackup="true"
+        android:icon="@drawable/ic_app_icon"
+        android:roundIcon="@drawable/ic_app_icon"
         android:label="全益採購追蹤"
         android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="ocr_chinese" />
+
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+
         <activity
-            android:name=".MainActivity"
+            android:name=".GemmaSetupActivity"
             android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <receiver android:name=".ReminderReceiver" android:exported="false" />
+
+        <activity android:name=".EnhancedAiMainActivity" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:exported="false" />
+        <activity android:name=".AiMainActivity" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:exported="false" />
+        <activity android:name=".PurchaseEditActivity" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:exported="false" />
+        <activity android:name=".KnowledgeBaseActivity" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:exported="false" />
+        <activity android:name=".SafeMainActivityV204" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:exported="false" />
+
+        <service android:name=".AiAnalysisService" android:exported="false" android:foregroundServiceType="dataSync" />
     </application>
 </manifest>

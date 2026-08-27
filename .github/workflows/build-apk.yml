@@ -12,18 +12,68 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Checkout pinned MiniCPM Android runtime
+        run: |
+          git init minicpm-v-apps
+          git -C minicpm-v-apps remote add origin https://github.com/OpenBMB/MiniCPM-V-Apps.git
+          git -C minicpm-v-apps fetch --depth 1 origin bbd042eebd333ab64998d2e630e01d58e673ca3f
+          git -C minicpm-v-apps checkout --detach FETCH_HEAD
+
+          git init llama.cpp-omni
+          git -C llama.cpp-omni remote add origin https://github.com/tc-mb/llama.cpp-omni.git
+          git -C llama.cpp-omni fetch --depth 1 origin bebcf1676fe90db4dd9b4e9764d89e48ed52bdd9
+          git -C llama.cpp-omni checkout --detach FETCH_HEAD
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
       - uses: android-actions/setup-android@v3
-      - name: Install Android SDK
-        run: yes | sdkmanager --licenses >/dev/null && sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Install Android SDK, NDK and CMake
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
+
+      - name: Build bundled PP-OCRv6 Medium Android SDK
+        run: |
+          set -euxo pipefail
+          git init paddleocr
+          git -C paddleocr remote add origin https://github.com/PaddlePaddle/PaddleOCR.git
+          git -C paddleocr fetch --depth 1 origin 2661c7c0ef5c613e8f93c6e93b2e052399f0f854
+          git -C paddleocr checkout --detach FETCH_HEAD
+
+          SDK_DIR="$GITHUB_WORKSPACE/paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models"
+          mkdir -p "$SDK_DIR/det" "$SDK_DIR/rec"
+          curl -fL --retry 4 --retry-delay 3 \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx/resolve/main/inference.onnx?download=true" \
+            -o "$SDK_DIR/det/inference.onnx"
+          curl -fL --retry 4 --retry-delay 3 \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/resolve/main/inference.onnx?download=true" \
+            -o "$SDK_DIR/rec/inference.onnx"
+          curl -fL --retry 4 --retry-delay 3 \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/resolve/main/inference.yml?download=true" \
+            -o "$SDK_DIR/rec/inference.yml"
+
+          echo "eb13b44b25bb36f89528b68720af8a61d9cf381176107f465db1757b65d086e1  $SDK_DIR/det/inference.onnx" | sha256sum -c -
+          echo "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba  $SDK_DIR/rec/inference.onnx" | sha256sum -c -
+
+          cd "$GITHUB_WORKSPACE/paddleocr/deploy/ppocr-android"
+          chmod +x gradlew
+          ./gradlew :ppocr-sdk:assembleRelease --no-daemon --stacktrace
+          mkdir -p "$GITHUB_WORKSPACE/app/libs"
+          cp ppocr-sdk/build/outputs/aar/ppocr-sdk-release.aar "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
+          ls -lh "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
+
       - uses: actions/upload-artifact@v4
         with:
           name: TFT-Purchase-Tracker-APK
