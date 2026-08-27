@@ -170,16 +170,16 @@ private fun AgentPage(
 private fun StatusCard(state: AgentUiState) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MiniStatus("模型", if (state.ready) "Ready" else "未啟動", state.ready)
-            MiniStatus("控制", if (state.controlEnabled) "已授權" else "未授權", state.controlEnabled)
-            MiniStatus("網路", "離線", true)
+            MiniStatus("模型", if (state.ready) "Ready" else "未啟動", state.ready, Modifier.weight(1f))
+            MiniStatus("控制", if (state.controlEnabled) "已授權" else "未授權", state.controlEnabled, Modifier.weight(1f))
+            MiniStatus("網路", "離線", true, Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun MiniStatus(title: String, value: String, ok: Boolean) {
-    Column(Modifier.weight(1f)) {
+private fun MiniStatus(title: String, value: String, ok: Boolean, modifier: Modifier = Modifier) {
+    Column(modifier) {
         Text(title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(7.dp).background(if (ok) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.tertiary, CircleShape))
