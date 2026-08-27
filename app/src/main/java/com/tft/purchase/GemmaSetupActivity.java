@@ -18,7 +18,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
-/** Gemma 4 E4B setup with real DownloadManager completion + SHA-256 validation. */
+/** Launcher/model setup UI kept in the existing Activity to preserve app navigation. */
 public class GemmaSetupActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView status;
@@ -29,6 +29,7 @@ public class GemmaSetupActivity extends Activity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        AiModelRegistry.setActive(this, AiModelRegistry.MINICPM_V46);
         render();
         refresh();
     }
@@ -59,7 +60,7 @@ public class GemmaSetupActivity extends Activity {
         tt.setOrientation(LinearLayout.VERTICAL);
         tt.setPadding(dp(12), 0, 0, 0);
         tt.addView(label("全益採購追蹤", 27, Color.rgb(15,42,92), true));
-        tt.addView(label("GEMMA 4 E4B｜本機免費辨識", 15, Color.rgb(37,99,235), true));
+        tt.addView(label("MiniCPM-V 4.6 + ML Kit OCR｜本機辨識", 14, Color.rgb(37,99,235), true));
         titleRow.addView(tt, new LinearLayout.LayoutParams(0, -2, 1));
         root.addView(titleRow);
 
@@ -71,11 +72,12 @@ public class GemmaSetupActivity extends Activity {
         cp.setMargins(0, dp(20), 0, dp(14));
         root.addView(card, cp);
 
-        card.addView(label("V2.0.10 修正模型下載誤判", 18, Color.rgb(15,42,92), true));
-        card.addView(label("模型真正大小為 3,659,530,240 bytes（約 3.66 GB）。APP 現在只有在 Android 系統確認下載完成、檔案大小正確、SHA-256 完整性驗證通過後，才會顯示 AI 已就緒。", 15, Color.rgb(71,85,105), false));
-        card.addView(label("如果幾秒內就顯示完成，這版會把它判定為不完整並要求重新下載，不會再拿壞掉的模型做辨識。", 14, Color.rgb(220,38,38), true));
+        card.addView(label("V2.0.12｜AI 引擎更換", 18, Color.rgb(15,42,92), true));
+        card.addView(label("辨識流程已改成：Google ML Kit 中文 OCR 先讀文字 → MiniCPM-V 4.6 同時看原圖與 OCR → 輸出採購資料 → 你可確認或修改後存入原本資料庫。", 15, Color.rgb(71,85,105), false));
+        card.addView(label("MiniCPM-V 4.6 使用官方 GGUF + llama.cpp Android 本機推論。主模型約 0.53 GB，視覺模型約 1.11 GB，合計約 1.6 GB；下載完成後可離線辨識，不使用付費 AI API。", 14, Color.rgb(22,101,52), true));
+        card.addView(label("舊 Gemma 模型不再是目前辨識引擎。開始下載 MiniCPM 時會清理舊 Gemma 模型檔，釋放手機空間。", 13, Color.rgb(100,116,139), false));
 
-        status = label("檢查 Gemma 4 E4B 模型中…", 15, Color.rgb(71,85,105), false);
+        status = label("檢查 MiniCPM-V 4.6 模型中…", 15, Color.rgb(71,85,105), false);
         root.addView(status);
         progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax(100);
@@ -83,11 +85,11 @@ public class GemmaSetupActivity extends Activity {
         pp.setMargins(0, dp(8), 0, dp(12));
         root.addView(progress, pp);
 
-        download = button("下載 Gemma 4 E4B（約 3.66 GB）", Color.rgb(37,99,235));
+        download = button("下載 MiniCPM-V 4.6（約 1.6 GB）", Color.rgb(37,99,235));
         download.setOnClickListener(v -> {
             try {
-                GemmaModelManager.startDownload(this);
-                Toast.makeText(this, "已開始重新下載 Gemma 4 E4B", Toast.LENGTH_LONG).show();
+                MiniCpmV46ModelManager.startDownload(this);
+                Toast.makeText(this, "MiniCPM-V 4.6 已開始下載；可在這裡查看真實進度", Toast.LENGTH_LONG).show();
                 refresh();
             } catch (Exception e) {
                 Toast.makeText(this, "下載啟動失敗：" + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -98,7 +100,7 @@ public class GemmaSetupActivity extends Activity {
         enter = button("進入 APP（僅查看既有資料）", Color.rgb(71,85,105));
         enter.setOnClickListener(v -> openMain());
         root.addView(enter, margins(8,6));
-        root.addView(label("下載期間可以進入 APP 查看既有採購資料與提醒，但新增／重新 AI 分析必須等模型驗證通過。", 13, Color.rgb(100,116,139), false));
+        root.addView(label("模型尚未完成時仍可查看、搜尋、編輯既有採購資料與提醒；新增／重新 AI 分析需等模型驗證通過。", 13, Color.rgb(100,116,139), false));
         setContentView(root);
     }
 
@@ -110,20 +112,20 @@ public class GemmaSetupActivity extends Activity {
     };
 
     private void refresh() {
-        if (GemmaModelManager.isReady(this)) {
-            status.setText("Gemma 4 E4B 已完整下載並驗證通過 ✓\n模型大小：3.66 GB｜SHA-256：通過");
+        if (MiniCpmV46ModelManager.isReady(this)) {
+            status.setText("MiniCPM-V 4.6 已就緒 ✓\nML Kit OCR + 圖片 AI 可離線使用");
             status.setTextColor(Color.rgb(22,163,74));
             progress.setProgress(100);
-            download.setText("Gemma 4 E4B 已就緒");
+            download.setText("MiniCPM-V 4.6 已就緒");
             download.setEnabled(false);
             enter.setText("進入 APP（AI 已就緒）");
             enter.setEnabled(true);
             return;
         }
 
-        GemmaModelManager.Status s = GemmaModelManager.getStatus(this);
+        MiniCpmV46ModelManager.Status s = MiniCpmV46ModelManager.getStatus(this);
         if (validating) {
-            status.setText("下載已完成，正在驗證 3.66 GB 模型完整性…\n這一步會完整讀取模型並核對官方 SHA-256，請稍候。");
+            status.setText("兩個模型檔已下載完成，正在核對官方 MD5…\n驗證約 1.6 GB 檔案需要一些時間，請稍候。");
             status.setTextColor(Color.rgb(202,138,4));
             progress.setProgress(100);
             download.setEnabled(false);
@@ -134,8 +136,7 @@ public class GemmaSetupActivity extends Activity {
         if (s.state == DownloadManager.STATUS_RUNNING || s.state == DownloadManager.STATUS_PENDING || s.state == DownloadManager.STATUS_PAUSED) {
             int p = s.percent();
             progress.setProgress(p);
-            long total = s.total > 0 ? s.total : GemmaModelManager.EXPECTED_SIZE;
-            status.setText("Gemma 4 E4B 真正下載中：" + p + "%\n已下載 " + gb(s.downloaded) + " / " + gb(total) + " GB\n注意：目的檔可能預先顯示很大，但只有系統下載進度才算數。");
+            status.setText("MiniCPM-V 4.6 下載中：" + p + "%\n已下載 " + gb(s.downloaded) + " / " + gb(s.total) + " GB\n主模型與視覺模型會同時下載。");
             status.setTextColor(Color.rgb(71,85,105));
             download.setText("下載進行中…");
             download.setEnabled(false);
@@ -144,7 +145,7 @@ public class GemmaSetupActivity extends Activity {
         }
 
         if (s.state == DownloadManager.STATUS_SUCCESSFUL && s.needsValidation) {
-            status.setText("下載 100% 完成，準備驗證模型完整性…");
+            status.setText("下載 100% 完成，準備驗證 MiniCPM 模型…");
             progress.setProgress(100);
             download.setEnabled(false);
             startValidation();
@@ -153,21 +154,20 @@ public class GemmaSetupActivity extends Activity {
 
         if ((s.validationError != null && !s.validationError.isEmpty()) || s.state == DownloadManager.STATUS_FAILED) {
             String err = s.validationError != null && !s.validationError.isEmpty()
-                    ? s.validationError
-                    : "Android 下載失敗，錯誤碼：" + s.reason;
-            status.setText("模型不可使用：\n" + err + "\n請按下方重新下載。");
+                    ? s.validationError : "Android 下載失敗，錯誤碼：" + s.reason;
+            status.setText("MiniCPM 模型目前不可使用：\n" + err + "\n請重新下載。");
             status.setTextColor(Color.rgb(220,38,38));
             progress.setProgress(0);
-            download.setText("刪除錯誤檔並重新下載 Gemma 4 E4B");
+            download.setText("重新下載 MiniCPM-V 4.6");
             download.setEnabled(true);
             enter.setText("進入 APP（AI 尚不可用）");
             return;
         }
 
-        status.setText("Gemma 4 E4B 尚未完整安裝\n需要真正下載約 3.66 GB，不可能在一般網路下數秒完成。");
+        status.setText("MiniCPM-V 4.6 尚未安裝\n需要下載約 1.6 GB，完成後所有 OCR + AI 辨識都在手機本機執行。");
         status.setTextColor(Color.rgb(71,85,105));
         progress.setProgress(0);
-        download.setText("下載 Gemma 4 E4B（約 3.66 GB）");
+        download.setText("下載 MiniCPM-V 4.6（約 1.6 GB）");
         download.setEnabled(true);
         enter.setText("進入 APP（僅查看既有資料）");
     }
@@ -176,13 +176,13 @@ public class GemmaSetupActivity extends Activity {
         if (validating) return;
         validating = true;
         new Thread(() -> {
-            GemmaModelManager.ValidationResult r = GemmaModelManager.validateDownloadedModel(this);
+            MiniCpmV46ModelManager.ValidationResult r = MiniCpmV46ModelManager.validateDownloadedModel(this);
             runOnUiThread(() -> {
                 validating = false;
                 Toast.makeText(this, r.message, Toast.LENGTH_LONG).show();
                 refresh();
             });
-        }, "gemma-sha256-verify").start();
+        }, "minicpm-md5-verify").start();
     }
 
     private void openMain() {
