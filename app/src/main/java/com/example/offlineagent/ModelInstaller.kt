@@ -64,7 +64,7 @@ class ModelInstaller(
     }
 
     fun cancel() {
-        activeDownloadId()?.let(downloadManager::remove)
+        activeDownloadId()?.let { id -> downloadManager.remove(id) }
         prefs.edit().remove(KEY_DOWNLOAD_ID).putBoolean(KEY_VERIFIED, false).apply()
         modelFile().delete()
     }
