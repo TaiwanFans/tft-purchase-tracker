@@ -30,6 +30,10 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Apply v1.4.0 AI scanner integration
+        working-directory: android-document-cropper
+        run: python3 patch_v140.py
+
       - name: Build debug APK
         working-directory: android-document-cropper
         run: gradle :app:assembleDebug
