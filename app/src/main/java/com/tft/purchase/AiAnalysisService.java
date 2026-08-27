@@ -14,11 +14,11 @@ import java.util.ArrayList;
 
 /**
  * Foreground service for the replaceable local AI pipeline:
- * ML Kit OCR -> active AiModelProvider -> validation -> existing purchase database.
+ * document correction -> PP-OCRv6 Small + ML Kit -> active AiModelProvider -> validation -> existing DB.
  */
 public class AiAnalysisService extends Service {
     public static final String ACTION_UPDATE = "com.tft.purchase.AI_JOB_UPDATE";
-    private static final String CHANNEL = "local_ai_analysis_v212";
+    private static final String CHANNEL = "local_ai_analysis_v213";
     private static final int NOTIFICATION_ID = 8235708;
     private volatile boolean processing = false;
     private int created = 0;
@@ -37,7 +37,7 @@ public class AiAnalysisService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         createChannel();
-        startForeground(NOTIFICATION_ID, notification("準備 ML Kit OCR 與本機 AI", 1, false));
+        startForeground(NOTIFICATION_ID, notification("準備文件校正與雙 OCR", 1, false));
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -86,38 +86,46 @@ public class AiAnalysisService extends Service {
             return;
         }
 
-        final String path = paths.get(index);
+        final String originalPath = paths.get(index);
         final int total = paths.size();
         final int base = (int)((index * 100f) / total);
         final int span = Math.max(1, 100 / total);
 
-        updateJob(base + 2, "第 " + (index + 1) + "/" + total + " 張｜Google ML Kit OCR 讀取文字",
+        updateJob(base + 2,
+                "第 " + (index + 1) + "/" + total + " 張｜校正文件、去陰影與提升文字清晰度",
                 index, total);
 
-        MlKitOcrBridge.recognize(this, path, new MlKitOcrBridge.Callback() {
-            @Override public void onSuccess(String ocrText) {
-                updateJob(base + Math.max(3, span * 18 / 100),
-                        "第 " + (index + 1) + "/" + total + " 張｜OCR 完成，交給本機 MiniCPM 理解",
+        HybridOcrBridge.recognize(this, originalPath, new HybridOcrBridge.Callback() {
+            @Override public void onSuccess(HybridOcrBridge.Result result) {
+                updateJob(base + Math.max(4, span * 22 / 100),
+                        "第 " + (index + 1) + "/" + total + " 張｜PP-OCRv6 + ML Kit 雙 OCR 完成",
                         index, total);
-                runLocalModel(paths, index, replaceId, path, ocrText == null ? "" : ocrText, total, base, span);
+                String modelImage = result.preparedImagePath == null || result.preparedImagePath.isEmpty()
+                        ? originalPath : result.preparedImagePath;
+                runLocalModel(paths, index, replaceId, originalPath, modelImage,
+                        result.evidence, result, total, base, span);
             }
 
             @Override public void onFailure(String error) {
-                // Do not lose the purchase photo if OCR fails. MiniCPM can still inspect the image itself.
-                updateJob(base + Math.max(3, span * 18 / 100),
-                        "第 " + (index + 1) + "/" + total + " 張｜OCR 未完成，改由圖片 AI 判讀",
+                // Keep the workflow alive: MiniCPM can still inspect the original image, but the record is warned.
+                updateJob(base + Math.max(4, span * 22 / 100),
+                        "第 " + (index + 1) + "/" + total + " 張｜雙 OCR 未完成，改由圖片 AI 判讀",
                         index, total);
-                runLocalModel(paths, index, replaceId, path, "", total, base, span);
+                runLocalModel(paths, index, replaceId, originalPath, originalPath,
+                        "[OCR_ERROR] " + (error == null ? "雙 OCR 未完成" : error), null,
+                        total, base, span);
             }
         });
     }
 
-    private void runLocalModel(ArrayList<String> paths, int index, long replaceId, String path,
-                               String ocrText, int total, int base, int span) {
+    private void runLocalModel(ArrayList<String> paths, int index, long replaceId,
+                               String originalPath, String modelImagePath, String ocrEvidence,
+                               HybridOcrBridge.Result hybridResult,
+                               int total, int base, int span) {
         AiModelProvider provider = AiModelRegistry.active(this);
-        provider.analyze(this, path, ocrText, (percent, stage) -> {
-            int modelStart = 20;
-            int modelSpan = 75;
+        provider.analyze(this, modelImagePath, ocrEvidence, (percent, stage) -> {
+            int modelStart = 24;
+            int modelSpan = 71;
             int mapped = modelStart + Math.max(0, Math.min(modelSpan, percent * modelSpan / 100));
             int overall = Math.min(98, base + Math.max(1, (int)(span * (mapped / 100f))));
             String text = "第 " + (index + 1) + "/" + total + " 張｜" + stage;
@@ -127,10 +135,10 @@ public class AiAnalysisService extends Service {
         }, new AiModelCallback() {
             @Override public void onSuccess(String response) {
                 try {
-                    PurchaseOcrParser.ParsedPurchase parsed = AiJsonParser.parse(response, ocrText);
+                    PurchaseOcrParser.ParsedPurchase parsed = AiJsonParser.parse(response, ocrEvidence);
                     AiResultValidator.Validation validation = AiResultValidator.validateAndSanitize(parsed);
                     boolean reliable = validation.reliable;
-                    long id = saveParsed(parsed, path,
+                    long id = saveParsed(parsed, originalPath,
                             replaceId > 0 && total == 1 ? replaceId : -1,
                             reliable, validation.message);
                     created++;
@@ -145,20 +153,22 @@ public class AiAnalysisService extends Service {
                     sendUpdate();
                 } catch (Throwable t) {
                     try {
-                        long id = savePlaceholder(path,
+                        long id = savePlaceholder(originalPath,
                                 replaceId > 0 && total == 1 ? replaceId : -1,
                                 "AI 結果處理失敗：" + safeMessage(t));
                         created++;
                         warnings++;
                         AiJobStore.appendId(AiAnalysisService.this, id);
                     } catch (Throwable ignored) {}
+                } finally {
+                    if (hybridResult != null) hybridResult.cleanup();
                 }
                 processNext(paths, index + 1, replaceId);
             }
 
             @Override public void onFailure(String error) {
                 try {
-                    long id = savePlaceholder(path,
+                    long id = savePlaceholder(originalPath,
                             replaceId > 0 && total == 1 ? replaceId : -1,
                             error == null ? "本機 AI 分析失敗" : error);
                     created++;
@@ -168,7 +178,10 @@ public class AiAnalysisService extends Service {
                             "第 " + (index + 1) + " 張已留下原圖，可重新 AI 分析",
                             index + 1, total, created, 0);
                     sendUpdate();
-                } catch (Throwable ignored) {}
+                } catch (Throwable ignored) {
+                } finally {
+                    if (hybridResult != null) hybridResult.cleanup();
+                }
                 processNext(paths, index + 1, replaceId);
             }
         });
@@ -256,7 +269,7 @@ public class AiAnalysisService extends Service {
         NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if (nm == null) return;
         NotificationChannel c = new NotificationChannel(CHANNEL, "本機 AI 採購單分析", NotificationManager.IMPORTANCE_LOW);
-        c.setDescription("ML Kit OCR 與本機 MiniCPM-V 分析採購單時顯示進度");
+        c.setDescription("PP-OCRv6、ML Kit 與本機 MiniCPM-V 分析採購單時顯示進度");
         c.setSound(null, null);
         nm.createNotificationChannel(c);
     }
@@ -270,7 +283,7 @@ public class AiAnalysisService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         b.setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(finished ? "全益採購追蹤｜AI 結果已建立" : "全益採購追蹤｜OCR + MiniCPM 分析中")
+                .setContentTitle(finished ? "全益採購追蹤｜AI 結果已建立" : "全益採購追蹤｜雙 OCR + MiniCPM 分析中")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOnlyAlertOnce(true)
