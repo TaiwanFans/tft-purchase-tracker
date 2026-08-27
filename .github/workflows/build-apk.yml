@@ -37,6 +37,36 @@ jobs:
           yes | sdkmanager --licenses >/dev/null
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
 
+      - name: Build bundled PP-OCRv6 Small Android SDK
+        run: |
+          set -euxo pipefail
+          git init paddleocr
+          git -C paddleocr remote add origin https://github.com/PaddlePaddle/PaddleOCR.git
+          git -C paddleocr fetch --depth 1 origin 2661c7c0ef5c613e8f93c6e93b2e052399f0f854
+          git -C paddleocr checkout --detach FETCH_HEAD
+
+          SDK_DIR="$GITHUB_WORKSPACE/paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models"
+          mkdir -p "$SDK_DIR/det" "$SDK_DIR/rec"
+          curl -fL --retry 4 --retry-delay 3 \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/main/inference.onnx?download=true" \
+            -o "$SDK_DIR/det/inference.onnx"
+          curl -fL --retry 4 --retry-delay 3 \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/main/inference.onnx?download=true" \
+            -o "$SDK_DIR/rec/inference.onnx"
+          curl -fL --retry 4 --retry-delay 3 \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/main/inference.yml?download=true" \
+            -o "$SDK_DIR/rec/inference.yml"
+
+          echo "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e  $SDK_DIR/det/inference.onnx" | sha256sum -c -
+          echo "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634  $SDK_DIR/rec/inference.onnx" | sha256sum -c -
+
+          cd "$GITHUB_WORKSPACE/paddleocr/deploy/ppocr-android"
+          chmod +x gradlew
+          ./gradlew :ppocr-sdk:assembleRelease --no-daemon --stacktrace
+          mkdir -p "$GITHUB_WORKSPACE/app/libs"
+          cp ppocr-sdk/build/outputs/aar/ppocr-sdk-release.aar "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
+          ls -lh "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
