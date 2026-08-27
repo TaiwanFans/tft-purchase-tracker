@@ -27,6 +27,7 @@ import org.opencv.imgproc.Imgproc;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 final class ImageUtils {
@@ -102,21 +103,32 @@ final class ImageUtils {
 
         Bitmap detectBitmap = null;
         Mat rgba = new Mat();
+        Mat rgb = new Mat();
         Mat gray = new Mat();
+        Mat hsv = new Mat();
+        Mat edgeReference = new Mat();
         ArrayList<Mat> maps = new ArrayList<>();
         try {
-            final int maxDetectDim = 1200;
+            final int maxDetectDim = 1280;
             double scale = Math.min(1.0, maxDetectDim / (double)Math.max(src.getWidth(), src.getHeight()));
             int dw = Math.max(32, (int)Math.round(src.getWidth() * scale));
             int dh = Math.max(32, (int)Math.round(src.getHeight() * scale));
             detectBitmap = scale < 1.0 ? Bitmap.createScaledBitmap(src, dw, dh, true) : src;
 
             Utils.bitmapToMat(detectBitmap, rgba);
-            Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
+            Imgproc.cvtColor(rgba, rgb, Imgproc.COLOR_RGBA2RGB);
+            Imgproc.cvtColor(rgb, gray, Imgproc.COLOR_RGB2GRAY);
+            Imgproc.cvtColor(rgb, hsv, Imgproc.COLOR_RGB2HSV);
             Imgproc.GaussianBlur(gray, gray, new Size(5,5), 0);
 
-            Candidate best = null;
-            int[][] canny = {{30,90},{45,135},{60,180},{80,220}};
+            Imgproc.Canny(gray, edgeReference, 38, 118);
+            Mat edgeKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(3,3));
+            Imgproc.dilate(edgeReference, edgeReference, edgeKernel);
+            edgeKernel.release();
+
+            ArrayList<Candidate> candidates = new ArrayList<>();
+
+            int[][] canny = {{24,72},{36,108},{52,156},{72,216}};
             for (int[] t : canny) {
                 Mat edge = new Mat();
                 Imgproc.Canny(gray, edge, t[0], t[1]);
@@ -124,25 +136,53 @@ final class ImageUtils {
                 Imgproc.morphologyEx(edge, edge, Imgproc.MORPH_CLOSE, kernel);
                 kernel.release();
                 maps.add(edge);
+                findQuadCandidates(edge, rgba.cols(), rgba.rows(), 0, candidates);
             }
 
             Mat adaptive = new Mat();
-            Imgproc.adaptiveThreshold(gray, adaptive, 255, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 31, 9);
-            Mat adaptiveKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(7,7));
+            Imgproc.adaptiveThreshold(gray, adaptive, 255,
+                    Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 35, 10);
+            Mat adaptiveKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(9,9));
             Imgproc.morphologyEx(adaptive, adaptive, Imgproc.MORPH_CLOSE, adaptiveKernel);
             adaptiveKernel.release();
             maps.add(adaptive);
+            findQuadCandidates(adaptive, rgba.cols(), rgba.rows(), 1, candidates);
 
-            for (Mat edge : maps) {
-                Candidate c = findBestQuad(edge, rgba.cols(), rgba.rows());
-                if (c != null && (best == null || c.score > best.score)) best = c;
+            Mat otsu = new Mat();
+            Imgproc.threshold(gray, otsu, 0, 255, Imgproc.THRESH_BINARY | Imgproc.THRESH_OTSU);
+            Mat otsuKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(17,17));
+            Imgproc.morphologyEx(otsu, otsu, Imgproc.MORPH_CLOSE, otsuKernel);
+            otsuKernel.release();
+            maps.add(otsu);
+            findQuadCandidates(otsu, rgba.cols(), rgba.rows(), 2, candidates);
+
+            Mat paperMask = new Mat();
+            Core.inRange(hsv, new Scalar(0, 0, 108), new Scalar(180, 125, 255), paperMask);
+            Mat paperClose = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(23,23));
+            Mat paperOpen = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5,5));
+            Imgproc.morphologyEx(paperMask, paperMask, Imgproc.MORPH_CLOSE, paperClose);
+            Imgproc.morphologyEx(paperMask, paperMask, Imgproc.MORPH_OPEN, paperOpen);
+            paperClose.release();
+            paperOpen.release();
+            maps.add(paperMask);
+            findQuadCandidates(paperMask, rgba.cols(), rgba.rows(), 3, candidates);
+
+            Candidate best = chooseBestCandidate(candidates, gray, hsv, edgeReference, rgba.cols(), rgba.rows());
+
+            if (best == null || best.score < 54.0) {
+                Candidate lineCandidate = detectByDominantLines(edgeReference, gray, hsv, rgba.cols(), rgba.rows());
+                if (lineCandidate != null && (best == null || lineCandidate.score > best.score)) {
+                    best = lineCandidate;
+                }
             }
 
-            if (best == null) return fallbackDetectDocumentCorners(src);
+            if (best == null || best.score < 39.0) return fallbackDetectDocumentCorners(src);
+
+            Point[] expanded = expandQuad(best.points, rgba.cols(), rgba.rows(), 0.0045);
             float inv = (float)(1.0 / scale);
             PointF[] result = new PointF[4];
             for (int i=0;i<4;i++) {
-                result[i] = new PointF((float)best.points[i].x * inv, (float)best.points[i].y * inv);
+                result[i] = new PointF((float)expanded[i].x * inv, (float)expanded[i].y * inv);
             }
             if (!validQuad(result, src.getWidth(), src.getHeight())) return fallbackDetectDocumentCorners(src);
             return result;
@@ -150,53 +190,66 @@ final class ImageUtils {
             return fallbackDetectDocumentCorners(src);
         } finally {
             for (Mat m : maps) try { m.release(); } catch (Throwable ignored) {}
+            try { edgeReference.release(); } catch (Throwable ignored) {}
+            try { hsv.release(); } catch (Throwable ignored) {}
             try { gray.release(); } catch (Throwable ignored) {}
+            try { rgb.release(); } catch (Throwable ignored) {}
             try { rgba.release(); } catch (Throwable ignored) {}
             if (detectBitmap != null && detectBitmap != src && !detectBitmap.isRecycled()) detectBitmap.recycle();
         }
     }
 
-    private static Candidate findBestQuad(Mat binary, int w, int h) {
+    private static void findQuadCandidates(Mat binary, int w, int h, int sourceKind, List<Candidate> out) {
         ArrayList<MatOfPoint> contours = new ArrayList<>();
         Mat hierarchy = new Mat();
         Mat copy = binary.clone();
+        ArrayList<Candidate> local = new ArrayList<>();
         try {
-            Imgproc.findContours(copy, contours, hierarchy, Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE);
-            Candidate best = null;
+            int retrieval = sourceKind >= 2 ? Imgproc.RETR_EXTERNAL : Imgproc.RETR_LIST;
+            Imgproc.findContours(copy, contours, hierarchy, retrieval, Imgproc.CHAIN_APPROX_SIMPLE);
             double imageArea = w * (double)h;
+
             for (MatOfPoint contour : contours) {
+                double contourArea = Math.abs(Imgproc.contourArea(contour));
+                if (contourArea < imageArea * 0.07 || contourArea > imageArea * 0.992) continue;
+
+                MatOfPoint2f c2 = new MatOfPoint2f(contour.toArray());
                 try {
-                    double area = Math.abs(Imgproc.contourArea(contour));
-                    if (area < imageArea * 0.12 || area > imageArea * 0.995) continue;
-                    MatOfPoint2f c2 = new MatOfPoint2f(contour.toArray());
-                    try {
-                        double peri = Imgproc.arcLength(c2, true);
-                        for (double eps : new double[]{0.012,0.016,0.020,0.026,0.034}) {
-                            MatOfPoint2f approx = new MatOfPoint2f();
-                            try {
-                                Imgproc.approxPolyDP(c2, approx, peri*eps, true);
-                                Point[] pts = approx.toArray();
-                                if (pts.length != 4) continue;
-                                MatOfPoint poly = new MatOfPoint(pts);
-                                boolean convex;
-                                try { convex = Imgproc.isContourConvex(poly); }
-                                finally { poly.release(); }
-                                if (!convex) continue;
-                                Point[] ordered = orderPoints(pts);
-                                double score = quadScore(ordered, area, imageArea, w, h);
-                                if (score > 0 && (best == null || score > best.score)) best = new Candidate(ordered, score);
-                            } finally {
-                                approx.release();
-                            }
+                    double peri = Imgproc.arcLength(c2, true);
+                    if (peri < Math.min(w,h) * 0.70) continue;
+                    for (double eps : new double[]{0.010,0.014,0.018,0.023,0.030,0.040}) {
+                        MatOfPoint2f approx = new MatOfPoint2f();
+                        try {
+                            Imgproc.approxPolyDP(c2, approx, peri * eps, true);
+                            Point[] pts = approx.toArray();
+                            if (pts.length != 4) continue;
+                            MatOfPoint poly = new MatOfPoint(pts);
+                            boolean convex;
+                            try { convex = Imgproc.isContourConvex(poly); }
+                            finally { poly.release(); }
+                            if (!convex) continue;
+
+                            Point[] ordered = orderPoints(pts);
+                            double geometry = geometryScore(ordered, w, h);
+                            if (geometry < 0) continue;
+                            Candidate c = new Candidate(ordered, geometry, sourceKind);
+                            addUniqueCandidate(local, c, w, h);
+                        } finally {
+                            approx.release();
                         }
-                    } finally {
-                        c2.release();
                     }
                 } finally {
-                    contour.release();
+                    c2.release();
                 }
             }
-            return best;
+
+            Collections.sort(local, new Comparator<Candidate>() {
+                @Override public int compare(Candidate a, Candidate b) {
+                    return Double.compare(b.score, a.score);
+                }
+            });
+            int limit = Math.min(14, local.size());
+            for (int i=0;i<limit;i++) addUniqueCandidate(out, local.get(i), w, h);
         } finally {
             copy.release();
             hierarchy.release();
@@ -204,27 +257,249 @@ final class ImageUtils {
         }
     }
 
-    private static double quadScore(Point[] p, double area, double imageArea, int w, int h) {
-        double minSide = Math.min(Math.min(distance(p[0],p[1]), distance(p[1],p[2])), Math.min(distance(p[2],p[3]), distance(p[3],p[0])));
-        if (minSide < Math.min(w,h)*0.12) return -1;
-        double anglePenalty = 0;
-        for (int i=0;i<4;i++) {
-            Point prev = p[(i+3)%4], cur = p[i], next = p[(i+1)%4];
-            double ax=prev.x-cur.x, ay=prev.y-cur.y, bx=next.x-cur.x, by=next.y-cur.y;
-            double cos = Math.abs((ax*bx+ay*by)/(Math.max(1e-6,Math.hypot(ax,ay)*Math.hypot(bx,by))));
-            anglePenalty += cos;
+    private static Candidate chooseBestCandidate(List<Candidate> candidates, Mat gray, Mat hsv, Mat edgeRef, int w, int h) {
+        Candidate best = null;
+        for (Candidate c : candidates) {
+            double score = fullDocumentScore(c.points, c.sourceKind, gray, hsv, edgeRef, w, h);
+            if (score < 0) continue;
+            c.score = score;
+            if (best == null || c.score > best.score) best = c;
         }
-        anglePenalty /= 4.0;
-        if (anglePenalty > 0.72) return -1;
+        return best;
+    }
+
+    private static double geometryScore(Point[] p, int w, int h) {
+        if (p == null || p.length != 4) return -1;
+        double area = polygonArea(p);
+        double imageArea = w * (double)h;
+        double areaRatio = area / imageArea;
+        if (areaRatio < 0.07 || areaRatio > 0.992) return -1;
+
+        double minSide = Math.min(Math.min(distance(p[0],p[1]), distance(p[1],p[2])),
+                Math.min(distance(p[2],p[3]), distance(p[3],p[0])));
+        if (minSide < Math.min(w,h) * 0.10) return -1;
+
+        double anglePenalty = quadAnglePenalty(p);
+        if (anglePenalty > 0.78) return -1;
+
         MatOfPoint temp = new MatOfPoint(p);
         Rect r;
         try { r = Imgproc.boundingRect(temp); }
         finally { temp.release(); }
-        double fill = area / Math.max(1.0, r.area());
+        double rectangularity = area / Math.max(1.0, r.area());
+
+        return areaRatio * 76.0 + (1.0-anglePenalty) * 14.0 + clamp01((rectangularity-0.45)/0.50) * 10.0;
+    }
+
+    private static double fullDocumentScore(Point[] p, int sourceKind, Mat gray, Mat hsv, Mat edgeRef, int w, int h) {
+        double area = polygonArea(p);
+        double imageArea = w * (double)h;
         double areaRatio = area / imageArea;
-        double score = areaRatio * 100.0 + fill * 8.0 + (1.0-anglePenalty)*10.0;
-        if (areaRatio > 0.90) score += 4.0;
-        return score;
+        if (areaRatio < 0.07 || areaRatio > 0.992) return -1;
+
+        double anglePenalty = quadAnglePenalty(p);
+        if (anglePenalty > 0.78) return -1;
+
+        double top = distance(p[0],p[1]);
+        double right = distance(p[1],p[2]);
+        double bottom = distance(p[2],p[3]);
+        double left = distance(p[3],p[0]);
+        double avgW = (top + bottom) * 0.5;
+        double avgH = (left + right) * 0.5;
+        double aspect = Math.min(avgW, avgH) / Math.max(1.0, Math.max(avgW, avgH));
+        if (aspect < 0.28) return -1;
+
+        MatOfPoint temp = new MatOfPoint(p);
+        Rect r;
+        try { r = Imgproc.boundingRect(temp); }
+        finally { temp.release(); }
+        double rectangularity = area / Math.max(1.0, r.area());
+
+        double cx=0, cy=0;
+        for (Point point : p) { cx += point.x; cy += point.y; }
+        cx /= 4.0; cy /= 4.0;
+        double centerDist = Math.hypot((cx-w*0.5)/(w*0.5), (cy-h*0.5)/(h*0.5));
+        double centerScore = 1.0 - clamp01(centerDist / 1.15);
+
+        Mat mask = Mat.zeros(h, w, CvType.CV_8U);
+        Mat borderMask = Mat.zeros(h, w, CvType.CV_8U);
+        Mat ring = new Mat();
+        Mat dilated = new Mat();
+        Mat intersection = new Mat();
+        MatOfPoint polygon = new MatOfPoint(p);
+        try {
+            Imgproc.fillConvexPoly(mask, polygon, Scalar.all(255));
+            for (int i=0;i<4;i++) {
+                Imgproc.line(borderMask, p[i], p[(i+1)%4], Scalar.all(255), 7);
+            }
+
+            Scalar insideGray = Core.mean(gray, mask);
+            Scalar insideHsv = Core.mean(hsv, mask);
+
+            Mat ringKernel = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, new Size(25,25));
+            try { Imgproc.dilate(mask, dilated, ringKernel); }
+            finally { ringKernel.release(); }
+            Core.subtract(dilated, mask, ring);
+            Scalar outsideGray = Core.countNonZero(ring) > 20 ? Core.mean(gray, ring) : insideGray;
+
+            Core.bitwise_and(edgeRef, borderMask, intersection);
+            double borderPixels = Math.max(1.0, Core.countNonZero(borderMask));
+            double edgeSupport = clamp01(Core.countNonZero(intersection) / borderPixels);
+
+            double paperBrightness = clamp01((insideGray.val[0] - 95.0) / 135.0);
+            double paperLowSaturation = clamp01((145.0 - insideHsv.val[1]) / 145.0);
+            double brightnessDifference = insideGray.val[0] - outsideGray.val[0];
+            double contrastScore = clamp01((brightnessDifference + 18.0) / 75.0);
+
+            double areaScore = clamp01((areaRatio - 0.06) / 0.58);
+            double angleScore = 1.0 - anglePenalty;
+            double rectScore = clamp01((rectangularity - 0.48) / 0.47);
+            double aspectScore = 1.0 - clamp01(Math.abs(aspect - 0.67) / 0.39);
+
+            double sourceBonus = 0;
+            if (sourceKind == 3) sourceBonus = 5.0;
+            else if (sourceKind == 2) sourceBonus = 2.5;
+            else if (sourceKind == 1) sourceBonus = 1.2;
+            else if (sourceKind == 4) sourceBonus = 2.0;
+
+            return areaScore * 38.0
+                    + angleScore * 15.0
+                    + rectScore * 7.0
+                    + aspectScore * 6.0
+                    + centerScore * 4.0
+                    + edgeSupport * 17.0
+                    + paperBrightness * 4.0
+                    + paperLowSaturation * 4.0
+                    + contrastScore * 5.0
+                    + sourceBonus;
+        } finally {
+            polygon.release();
+            mask.release();
+            borderMask.release();
+            ring.release();
+            dilated.release();
+            intersection.release();
+        }
+    }
+
+    private static Candidate detectByDominantLines(Mat edgeRef, Mat gray, Mat hsv, int w, int h) {
+        Mat lines = new Mat();
+        try {
+            Imgproc.HoughLinesP(edgeRef, lines, 1, Math.PI/180.0, 60,
+                    Math.min(w,h) * 0.28, Math.min(w,h) * 0.055);
+            if (lines.rows() < 4) return null;
+
+            ArrayList<LineSegment> horizontals = new ArrayList<>();
+            ArrayList<LineSegment> verticals = new ArrayList<>();
+            for (int i=0;i<lines.rows();i++) {
+                double[] v = lines.get(i,0);
+                if (v == null || v.length < 4) continue;
+                Point a = new Point(v[0],v[1]);
+                Point b = new Point(v[2],v[3]);
+                double dx = b.x-a.x, dy = b.y-a.y;
+                double length = Math.hypot(dx,dy);
+                double angle = Math.toDegrees(Math.atan2(dy,dx));
+                if (angle < 0) angle += 180.0;
+
+                if ((angle <= 36 || angle >= 144) && length >= w * 0.30) {
+                    horizontals.add(new LineSegment(a,b,length));
+                } else if (angle >= 54 && angle <= 126 && length >= h * 0.30) {
+                    verticals.add(new LineSegment(a,b,length));
+                }
+            }
+            if (horizontals.size() < 2 || verticals.size() < 2) return null;
+
+            LineSegment top = null, bottom = null, left = null, right = null;
+            for (LineSegment l : horizontals) {
+                double y = l.midY();
+                if (top == null || y < top.midY()) top = l;
+                if (bottom == null || y > bottom.midY()) bottom = l;
+            }
+            for (LineSegment l : verticals) {
+                double x = l.midX();
+                if (left == null || x < left.midX()) left = l;
+                if (right == null || x > right.midX()) right = l;
+            }
+            if (top == null || bottom == null || left == null || right == null) return null;
+            if (Math.abs(bottom.midY()-top.midY()) < h*0.25 || Math.abs(right.midX()-left.midX()) < w*0.25) return null;
+
+            Point tl = lineIntersection(top,left);
+            Point tr = lineIntersection(top,right);
+            Point br = lineIntersection(bottom,right);
+            Point bl = lineIntersection(bottom,left);
+            if (tl==null || tr==null || br==null || bl==null) return null;
+            Point[] p = new Point[]{tl,tr,br,bl};
+            for (Point q : p) {
+                if (q.x < -w*0.12 || q.x > w*1.12 || q.y < -h*0.12 || q.y > h*1.12) return null;
+                q.x = Math.max(0, Math.min(w-1, q.x));
+                q.y = Math.max(0, Math.min(h-1, q.y));
+            }
+            double score = fullDocumentScore(p, 4, gray, hsv, edgeRef, w, h);
+            return score > 0 ? new Candidate(p, score, 4) : null;
+        } catch (Throwable ignored) {
+            return null;
+        } finally {
+            lines.release();
+        }
+    }
+
+    private static Point lineIntersection(LineSegment a, LineSegment b) {
+        double x1=a.a.x, y1=a.a.y, x2=a.b.x, y2=a.b.y;
+        double x3=b.a.x, y3=b.a.y, x4=b.b.x, y4=b.b.y;
+        double den=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);
+        if (Math.abs(den) < 1e-6) return null;
+        double px=((x1*y2-y1*x2)*(x3-x4)-(x1-x2)*(x3*y4-y3*x4))/den;
+        double py=((x1*y2-y1*x2)*(y3-y4)-(y1-y2)*(x3*y4-y3*x4))/den;
+        return new Point(px,py);
+    }
+
+    private static void addUniqueCandidate(List<Candidate> list, Candidate candidate, int w, int h) {
+        double norm = Math.max(w,h);
+        for (int i=0;i<list.size();i++) {
+            Candidate existing = list.get(i);
+            double d=0;
+            for (int k=0;k<4;k++) d += distance(existing.points[k], candidate.points[k]);
+            d = d / 4.0 / norm;
+            if (d < 0.025) {
+                if (candidate.score > existing.score) list.set(i, candidate);
+                return;
+            }
+        }
+        list.add(candidate);
+    }
+
+    private static Point[] expandQuad(Point[] p, int w, int h, double ratio) {
+        double cx=0,cy=0;
+        for (Point q : p) { cx+=q.x; cy+=q.y; }
+        cx/=4.0; cy/=4.0;
+        Point[] out = new Point[4];
+        for (int i=0;i<4;i++) {
+            double nx = cx + (p[i].x-cx)*(1.0+ratio);
+            double ny = cy + (p[i].y-cy)*(1.0+ratio);
+            out[i]=new Point(Math.max(0,Math.min(w-1,nx)), Math.max(0,Math.min(h-1,ny)));
+        }
+        return out;
+    }
+
+    private static double quadAnglePenalty(Point[] p) {
+        double penalty=0;
+        for (int i=0;i<4;i++) {
+            Point prev=p[(i+3)%4], cur=p[i], next=p[(i+1)%4];
+            double ax=prev.x-cur.x, ay=prev.y-cur.y;
+            double bx=next.x-cur.x, by=next.y-cur.y;
+            double denom=Math.max(1e-6,Math.hypot(ax,ay)*Math.hypot(bx,by));
+            penalty += Math.abs((ax*bx+ay*by)/denom);
+        }
+        return penalty/4.0;
+    }
+
+    private static double polygonArea(Point[] p) {
+        double a=0;
+        for (int i=0;i<4;i++) {
+            Point q=p[i], r=p[(i+1)%4];
+            a += q.x*r.y-r.x*q.y;
+        }
+        return Math.abs(a)*0.5;
     }
 
     private static Point[] orderPoints(Point[] pts) {
@@ -249,8 +524,8 @@ final class ImageUtils {
             area+=a.x*b.y-b.x*a.y;
         }
         area=Math.abs(area)/2.0;
-        if(area < w*h*0.12) return false;
-        for(int i=0;i<4;i++) if(dist(p[i],p[(i+1)%4])<Math.min(w,h)*.10) return false;
+        if(area < w*h*0.08) return false;
+        for(int i=0;i<4;i++) if(dist(p[i],p[(i+1)%4])<Math.min(w,h)*.08) return false;
         return true;
     }
 
@@ -431,8 +706,23 @@ final class ImageUtils {
         return work;
     }
 
+    private static double clamp01(double v){return Math.max(0.0,Math.min(1.0,v));}
     private static int clamp(int v){return Math.max(0,Math.min(255,v));}
     private static double distance(Point a, Point b){return Math.hypot(a.x-b.x,a.y-b.y);}
     private static float dist(PointF a,PointF b){float dx=a.x-b.x,dy=a.y-b.y;return (float)Math.sqrt(dx*dx+dy*dy);}
-    private static final class Candidate { final Point[] points; final double score; Candidate(Point[] p,double s){points=p;score=s;} }
+
+    private static final class Candidate {
+        final Point[] points;
+        double score;
+        final int sourceKind;
+        Candidate(Point[] p,double s,int source){points=p;score=s;sourceKind=source;}
+    }
+
+    private static final class LineSegment {
+        final Point a,b;
+        final double length;
+        LineSegment(Point a, Point b, double length){this.a=a;this.b=b;this.length=length;}
+        double midX(){return (a.x+b.x)*0.5;}
+        double midY(){return (a.y+b.y)*0.5;}
+    }
 }
