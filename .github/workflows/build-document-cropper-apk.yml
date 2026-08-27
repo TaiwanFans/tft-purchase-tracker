@@ -37,6 +37,7 @@ jobs:
           python3 patch_v140.py
           python3 patch_v151.py
           python3 patch_v152.py
+          python3 patch_v152_fix.py
           grep -q "versionName '1.5.2'" app/build.gradle
           grep -q "HorizontalScrollView" app/src/main/java/com/quanyi/docscanner/MainActivity.java
           grep -q "取消這次掃描" app/src/main/java/com/quanyi/docscanner/MainActivity.java
