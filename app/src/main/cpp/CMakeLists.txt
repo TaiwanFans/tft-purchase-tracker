@@ -18,20 +18,33 @@ if(DEFINED ANDROID_ABI)
     endif()
 endif()
 
-# GitHub Actions checks out the exact OpenBMB-tested llama.cpp-omni revision here.
+# CI pins both repositories to the exact revisions used by OpenBMB's Android demo.
 if(NOT DEFINED LLAMA_SRC)
     set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../llama.cpp-omni)
 endif()
+if(NOT DEFINED MINICPM_APPS_SRC)
+    set(MINICPM_APPS_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../minicpm-v-apps)
+endif()
 get_filename_component(LLAMA_SRC ${LLAMA_SRC} ABSOLUTE)
+get_filename_component(MINICPM_APPS_SRC ${MINICPM_APPS_SRC} ABSOLUTE)
+
 if(NOT EXISTS ${LLAMA_SRC}/CMakeLists.txt)
     message(FATAL_ERROR "llama.cpp-omni not found at ${LLAMA_SRC}")
 endif()
 
+set(OFFICIAL_ANDROID_CPP ${MINICPM_APPS_SRC}/MiniCPM-V-demo-Android/app/src/main/cpp)
+if(NOT EXISTS ${OFFICIAL_ANDROID_CPP}/llama_jni.cpp)
+    message(FATAL_ERROR "OpenBMB MiniCPM-V Android JNI source not found at ${OFFICIAL_ANDROID_CPP}")
+endif()
+
 add_subdirectory(${LLAMA_SRC} ${CMAKE_BINARY_DIR}/build-llama)
 
-add_library(${CMAKE_PROJECT_NAME} SHARED llama_jni.cpp)
+# Compile OpenBMB's official Android MiniCPM-V JNI bridge unchanged. The Kotlin wrapper keeps
+# the original com.example.minicpm_v_demo.LlamaEngine class name so JNI symbols match exactly.
+add_library(${CMAKE_PROJECT_NAME} SHARED ${OFFICIAL_ANDROID_CPP}/llama_jni.cpp)
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+        ${OFFICIAL_ANDROID_CPP}
         ${LLAMA_SRC}
         ${LLAMA_SRC}/common
         ${LLAMA_SRC}/include
