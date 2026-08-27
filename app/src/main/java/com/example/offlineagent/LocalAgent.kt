@@ -36,7 +36,8 @@ data class AgentActionStep(
 
 class LocalAgent(
     private val context: Context,
-    private val modelPath: String
+    private val modelPath: String,
+    private val preferredBackend: String = "GPU"
 ) : AutoCloseable {
 
     private lateinit var engine: Engine
@@ -50,18 +51,8 @@ class LocalAgent(
 
     fun initialize(): RuntimeInfo {
         val cacheDir = context.cacheDir.path
-        val attempts = listOf(
-            Triple(
-                "GPU",
-                true,
-                EngineConfig(
-                    modelPath = modelPath,
-                    backend = Backend.GPU(),
-                    visionBackend = Backend.GPU(),
-                    audioBackend = Backend.CPU(),
-                    cacheDir = cacheDir
-                )
-            ),
+
+        val cpuAttempts = listOf(
             Triple(
                 "CPU",
                 true,
@@ -84,6 +75,24 @@ class LocalAgent(
             )
         )
 
+        val attempts = if (preferredBackend.equals("CPU", ignoreCase = true)) {
+            cpuAttempts
+        } else {
+            listOf(
+                Triple(
+                    "GPU",
+                    true,
+                    EngineConfig(
+                        modelPath = modelPath,
+                        backend = Backend.GPU(),
+                        visionBackend = Backend.GPU(),
+                        audioBackend = Backend.CPU(),
+                        cacheDir = cacheDir
+                    )
+                )
+            ) + cpuAttempts
+        }
+
         var lastError: Throwable? = null
         for ((backendName, multimodal, config) in attempts) {
             val candidate = Engine(config)
@@ -93,7 +102,11 @@ class LocalAgent(
                 runtimeInfo = RuntimeInfo(
                     backend = backendName,
                     multimodal = multimodal,
-                    detail = if (multimodal) "文字 + 視覺/音訊執行器已啟動" else "GPU/多模態不相容，已切到 CPU 純文字模式"
+                    detail = when {
+                        backendName == "GPU" -> "GPU 本機推論已啟動"
+                        multimodal -> "CPU 相容模式 · 文字 + 視覺/音訊"
+                        else -> "CPU 相容模式 · 純文字"
+                    }
                 )
                 conversation = engine.createConversation(
                     ConversationConfig(
@@ -140,8 +153,7 @@ class LocalAgent(
     fun confirmPending(
         onStep: (AgentActionStep) -> Unit = {}
     ): AgentRunResult {
-        val call = pendingTool
-            ?: return AgentRunResult("目前沒有待確認操作。")
+        val call = pendingTool ?: return AgentRunResult("目前沒有待確認操作。")
         val reason = pendingReason.orEmpty()
         pendingTool = null
         pendingReason = null
@@ -255,7 +267,7 @@ class LocalAgent(
     }
 
     private fun summarizeTool(call: ParsedToolCall): String = when (call.name) {
-        "open_app" -> "開啟 ${call.arguments.optString("package")}" 
+        "open_app" -> "開啟 ${call.arguments.optString("package")}"
         "tap" -> "點擊「${call.arguments.optString("selector") }」"
         "set_text" -> "在「${call.arguments.optString("selector") }」輸入文字"
         "scroll" -> "向 ${call.arguments.optString("direction", "down")} 滑動"
