@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -22,6 +23,12 @@ data class ChatMessage(
 data class AgentUiState(
     val modelPath: String? = null,
     val modelSizeBytes: Long = 0,
+    val modelInstalling: Boolean = false,
+    val modelInstallStatus: String = "not_installed",
+    val modelInstallPercent: Int = 0,
+    val modelDownloadedBytes: Long = 0,
+    val modelTotalBytes: Long = 0,
+    val modelInstallDetail: String = "",
     val ready: Boolean = false,
     val loading: Boolean = false,
     val generating: Boolean = false,
@@ -32,7 +39,7 @@ data class AgentUiState(
     val messages: List<ChatMessage> = listOf(
         ChatMessage(
             "assistant",
-            "我是 LocalPilot。模型載入後，我可以離線理解任務、讀取手機畫面、操作 App，並在敏感操作前請你確認。"
+            "我是 LocalPilot。第一次只要安裝 AI 模型並開啟手機控制權限，之後我會自動啟動。"
         )
     ),
     val error: String? = null
@@ -43,11 +50,15 @@ class AgentViewModel(
 ) : ViewModel() {
 
     private val prefs = appContext.getSharedPreferences("agent_app", Context.MODE_PRIVATE)
-    private val savedModelPath = prefs.getString("model_path", null)
+    private val installer = ModelInstaller(appContext)
+    private val savedModelPath = installer.installedModelPath()
+        ?: prefs.getString("model_path", null)?.takeIf { File(it).exists() }
+
     private val _state = MutableStateFlow(
         AgentUiState(
             modelPath = savedModelPath,
-            modelSizeBytes = savedModelPath?.let { File(it).takeIf(File::exists)?.length() } ?: 0L,
+            modelSizeBytes = savedModelPath?.let { File(it).length() } ?: 0L,
+            modelInstallStatus = if (savedModelPath != null) "installed" else "not_installed",
             controlEnabled = PhoneControlService.instance != null
         )
     )
@@ -55,8 +66,120 @@ class AgentViewModel(
 
     private var agent: LocalAgent? = null
 
+    init {
+        val activeDownload = installer.activeDownloadId()
+        when {
+            activeDownload != null -> viewModelScope.launch { monitorModelInstall(activeDownload) }
+            savedModelPath != null -> viewModelScope.launch {
+                delay(350)
+                initialize()
+            }
+        }
+    }
+
     fun refreshSystemState() {
         _state.update { it.copy(controlEnabled = PhoneControlService.instance != null) }
+    }
+
+    fun installModel() {
+        if (_state.value.modelInstalling) return
+
+        val installed = installer.installedModelPath()
+        if (installed != null) {
+            prefs.edit().putString("model_path", installed).apply()
+            _state.update {
+                it.copy(
+                    modelPath = installed,
+                    modelSizeBytes = File(installed).length(),
+                    modelInstallStatus = "installed",
+                    modelInstallPercent = 100,
+                    error = null
+                )
+            }
+            initialize()
+            return
+        }
+
+        viewModelScope.launch {
+            runCatching {
+                val id = withContext(Dispatchers.IO) { installer.startDownload() }
+                monitorModelInstall(id)
+            }.onFailure {
+                _state.update { current ->
+                    current.copy(
+                        modelInstalling = false,
+                        modelInstallStatus = "failed",
+                        error = "AI 模型安裝失敗：${it.message ?: it.javaClass.simpleName}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelModelInstall() {
+        installer.cancel()
+        _state.update {
+            it.copy(
+                modelInstalling = false,
+                modelInstallStatus = "not_installed",
+                modelInstallPercent = 0,
+                modelDownloadedBytes = 0,
+                modelTotalBytes = 0,
+                modelInstallDetail = "下載已取消",
+                error = null
+            )
+        }
+    }
+
+    private suspend fun monitorModelInstall(downloadId: Long) {
+        _state.update {
+            it.copy(
+                modelInstalling = true,
+                modelInstallStatus = "downloading",
+                error = null
+            )
+        }
+
+        runCatching {
+            withContext(Dispatchers.IO) {
+                installer.waitUntilReady(downloadId) { progress ->
+                    _state.update { current ->
+                        current.copy(
+                            modelInstalling = progress.status != ModelInstaller.STATUS_SUCCESS,
+                            modelInstallStatus = progress.status,
+                            modelInstallPercent = progress.percent,
+                            modelDownloadedBytes = progress.downloadedBytes,
+                            modelTotalBytes = progress.totalBytes,
+                            modelInstallDetail = progress.detail
+                        )
+                    }
+                }
+            }
+        }.onSuccess { file ->
+            prefs.edit().putString("model_path", file.absolutePath).apply()
+            _state.update {
+                it.copy(
+                    modelPath = file.absolutePath,
+                    modelSizeBytes = file.length(),
+                    modelInstalling = false,
+                    modelInstallStatus = "installed",
+                    modelInstallPercent = 100,
+                    modelDownloadedBytes = file.length(),
+                    modelTotalBytes = file.length(),
+                    modelInstallDetail = "AI 模型已安裝完成",
+                    messages = it.messages + ChatMessage("assistant", "AI 模型已安裝完成，正在自動啟動 LocalPilot。")
+                )
+            }
+            initialize()
+        }.onFailure { t ->
+            _state.update {
+                it.copy(
+                    modelInstalling = false,
+                    modelInstallStatus = "failed",
+                    error = "AI 模型安裝失敗：${t.message ?: t.javaClass.simpleName}"
+                )
+            }
+        }
     }
 
     fun onModelImported(uri: Uri) {
@@ -77,17 +200,22 @@ class AgentViewModel(
                     it.copy(
                         modelPath = target.absolutePath,
                         modelSizeBytes = target.length(),
+                        modelInstallStatus = "installed",
+                        modelInstallPercent = 100,
                         loading = false,
                         runtimeInfo = null,
-                        messages = it.messages + ChatMessage("assistant", "模型已匯入。下一步按「啟動 Agent」載入 LiteRT-LM。")
+                        messages = it.messages + ChatMessage("assistant", "本機模型已匯入，正在自動啟動 Agent。")
                     )
                 }
+                initialize()
             }.onFailure { fail(it, "模型匯入失敗") }
         }
     }
 
     fun initialize() {
         val path = _state.value.modelPath ?: return
+        if (_state.value.loading || _state.value.ready) return
+
         viewModelScope.launch {
             _state.update { it.copy(loading = true, error = null, steps = emptyList()) }
             runCatching {
