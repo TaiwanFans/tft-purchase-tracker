@@ -17,10 +17,7 @@
         android:enableOnBackInvokedCallback="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
-        <!-- Google Play services can download the Chinese OCR model during initial online setup. -->
-        <meta-data
-            android:name="com.google.mlkit.vision.DEPENDENCIES"
-            android:value="ocr_chinese" />
+        <meta-data android:name="com.google.mlkit.vision.DEPENDENCIES" android:value="ocr_chinese" />
 
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
@@ -36,33 +33,12 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".EnhancedAiMainActivity"
-            android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustResize"
-            android:exported="false" />
+        <activity android:name=".EnhancedAiMainActivity" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:exported="false" />
+        <activity android:name=".AiMainActivity" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:exported="false" />
+        <activity android:name=".PurchaseEditActivity" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:exported="false" />
+        <activity android:name=".KnowledgeBaseActivity" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:exported="false" />
+        <activity android:name=".SafeMainActivityV204" android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize" android:exported="false" />
 
-        <activity
-            android:name=".AiMainActivity"
-            android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustResize"
-            android:exported="false" />
-
-        <activity
-            android:name=".PurchaseEditActivity"
-            android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustResize"
-            android:exported="false" />
-
-        <activity
-            android:name=".SafeMainActivityV204"
-            android:screenOrientation="portrait"
-            android:windowSoftInputMode="adjustResize"
-            android:exported="false" />
-
-        <service
-            android:name=".AiAnalysisService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
+        <service android:name=".AiAnalysisService" android:exported="false" android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
