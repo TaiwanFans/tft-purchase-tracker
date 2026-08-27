@@ -41,7 +41,8 @@ public final class HybridOcrBridge {
 
         ZoomTiledOcrBridge.recognize(context, prepared.ocrPath, new ZoomTiledOcrBridge.Callback() {
             @Override public void onSuccess(String evidence) {
-                callback.onSuccess(new Result(evidence, prepared));
+                String enriched = evidence + "\n" + new RecognitionKnowledgeDb(context).buildPromptEvidence();
+                callback.onSuccess(new Result(enriched, prepared));
             }
 
             @Override public void onFailure(String error) {
@@ -56,11 +57,11 @@ public final class HybridOcrBridge {
         PaddleOcrBridge.recognize(context, prepared.ocrPath, new PaddleOcrCallback() {
             @Override public void onSuccess(String s) { synchronized (state) { state.pp=s==null?"":s; state.done++; finish(); } }
             @Override public void onFailure(String e) { synchronized (state) { state.ppErr=e==null?"":e; state.done++; finish(); } }
-            private void finish(){ finishFallback(state, prepared, callback, tiledError); }
+            private void finish(){ finishFallback(context, state, prepared, callback, tiledError); }
         });
         MlKitOcrBridge.recognize(context, prepared.ocrPath, new MlKitOcrBridge.Callback() {
-            @Override public void onSuccess(String s) { synchronized (state) { state.ml=s==null?"":s; state.done++; finishFallback(state, prepared, callback, tiledError); } }
-            @Override public void onFailure(String e) { synchronized (state) { state.mlErr=e==null?"":e; state.done++; finishFallback(state, prepared, callback, tiledError); } }
+            @Override public void onSuccess(String s) { synchronized (state) { state.ml=s==null?"":s; state.done++; finishFallback(context, state, prepared, callback, tiledError); } }
+            @Override public void onFailure(String e) { synchronized (state) { state.mlErr=e==null?"":e; state.done++; finishFallback(context, state, prepared, callback, tiledError); } }
         });
     }
 
@@ -68,7 +69,7 @@ public final class HybridOcrBridge {
         String pp="",ml="",ppErr="",mlErr=""; int done=0; boolean delivered=false;
     }
 
-    private static void finishFallback(State s, DocumentPreprocessor.Prepared prepared, Callback callback, String tiledError) {
+    private static void finishFallback(Context context, State s, DocumentPreprocessor.Prepared prepared, Callback callback, String tiledError) {
         if (s.done < 2 || s.delivered) return;
         s.delivered = true;
         if (s.pp.trim().isEmpty() && s.ml.trim().isEmpty()) {
@@ -82,6 +83,7 @@ public final class HybridOcrBridge {
                 .append("rule=此為備援結果，重要欄位若不清楚必須人工確認。\n");
         if (!s.pp.isEmpty()) ev.append(s.pp).append('\n');
         if (!s.ml.isEmpty()) ev.append(s.ml).append('\n');
+        ev.append(new RecognitionKnowledgeDb(context).buildPromptEvidence());
         callback.onSuccess(new Result(ev.toString(), prepared));
     }
 
