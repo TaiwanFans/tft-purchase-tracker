@@ -17,6 +17,11 @@
         android:enableOnBackInvokedCallback="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
+        <!-- Google Play services can download the Chinese OCR model during initial online setup. -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="ocr_chinese" />
+
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
 
@@ -30,6 +35,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".EnhancedAiMainActivity"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="false" />
 
         <activity
             android:name=".AiMainActivity"
