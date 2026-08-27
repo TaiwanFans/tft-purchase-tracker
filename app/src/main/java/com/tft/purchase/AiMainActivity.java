@@ -47,7 +47,8 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * V2.0.7 AI-first UI. Gemma fills purchase-order data; user only manages the manual workflow fields.
+ * Existing procurement UI. AI data is supplied by the replaceable local model pipeline
+ * (ML Kit OCR + the active AiModelProvider); manual workflow fields remain unchanged.
  */
 public class AiMainActivity extends Activity {
     private static final int REQ_IMAGES = 301;
@@ -159,7 +160,7 @@ public class AiMainActivity extends Activity {
         importBtn.setEnabled(!job.running());
         importBtn.setOnClickListener(v -> openPhotoPicker());
         page.addView(importBtn, margins(8,12));
-        page.addView(info("AI 自動處理", "供應廠商、地址、採購單號、採購日期、品項、數量、單位與每列交貨日都由 Gemma 自動辨識。你只需要處理簽名回傳日期、備註與完成狀態。"));
+        page.addView(info("OCR + 本機 AI 自動處理", "Google ML Kit 先讀取採購單文字，再由 MiniCPM-V 4.6 同時看原始圖片與 OCR，整理供應廠商、地址、採購單號、採購日期、品項、規格、數量、單位與每列交貨日。不確定的欄位會留空或標示需要人工確認。"));
 
         page.addView(section("最近要交貨"));
         int shown = 0;
@@ -176,7 +177,7 @@ public class AiMainActivity extends Activity {
         screen = ANALYSIS;
         LinearLayout page = page();
         page.addView(topBar("AI 分析進度", this::showHome));
-        page.addView(info("可以放心切到背景", "Gemma 在 Android 前景服務中分析。就算你回桌面或切到別的 APP，系統通知列仍會顯示進度；不要在系統設定中按「強制停止」。"));
+        page.addView(info("可以放心切到背景", "ML Kit OCR 與 MiniCPM-V 4.6 會在 Android 前景服務中分析。就算回桌面或切到別的 APP，系統通知列仍會顯示進度；不要在系統設定中按『強制停止』。"));
 
         LinearLayout card = card(Color.WHITE, CYAN);
         analysisStage = txt("準備中…", 18, NAVY, true); card.addView(analysisStage);
@@ -198,9 +199,9 @@ public class AiMainActivity extends Activity {
         analysisProgress.setProgress(s.progress);
         analysisStage.setText(s.stage == null || s.stage.isEmpty() ? "等待 AI…" : s.stage);
         if (s.running()) {
-            analysisSummary.setText("進度 " + s.progress + "%　｜　成功 " + s.success + "　｜　需重試 " + s.failed + "\n目前處理第 " + Math.max(1,s.current) + " / " + Math.max(1,s.total) + " 張");
+            analysisSummary.setText("進度 " + s.progress + "%　｜　成功 " + s.success + "　｜　需確認 " + s.failed + "\n目前處理第 " + Math.max(1,s.current) + " / " + Math.max(1,s.total) + " 張");
         } else if (AiJobStore.STATE_DONE.equals(s.state)) {
-            analysisSummary.setText("完成 ✓　成功 " + s.success + " 張" + (s.failed > 0 ? "，另有 " + s.failed + " 張未通過可靠度檢查，沒有寫入錯誤資料。" : ""));
+            analysisSummary.setText("完成 ✓　成功 " + s.success + " 張" + (s.failed > 0 ? "，另有 " + s.failed + " 張包含不確定欄位，請人工確認。" : ""));
         } else if (AiJobStore.STATE_ERROR.equals(s.state)) {
             analysisSummary.setText("分析未完成：" + (s.error == null || s.error.isEmpty() ? s.stage : s.error));
         }
@@ -211,7 +212,7 @@ public class AiMainActivity extends Activity {
         LinearLayout page = page(); page.addView(topBar("採購單", this::showHome));
         Button add = action("＋ AI 分析新採購單", BLUE); add.setOnClickListener(v -> openPhotoPicker()); page.addView(add, margins(6,10));
         List<PurchaseDbHelper.Purchase> list = db.list("");
-        if (list.isEmpty()) page.addView(info("還沒有採購資料", "從相簿選擇採購單，Gemma 分析通過後會自動建立。"));
+        if (list.isEmpty()) page.addView(info("還沒有採購資料", "從相簿選擇採購單，ML Kit OCR + MiniCPM-V 4.6 分析後會自動建立。"));
         for (PurchaseDbHelper.Purchase p : list) page.addView(purchaseCard(p));
         setScreen(page, PURCHASES);
     }
@@ -230,10 +231,12 @@ public class AiMainActivity extends Activity {
         screen = SETTINGS;
         LinearLayout page = page(); page.addView(topBar("設定", this::showHome));
         page.addView(section("AI 辨識"));
-        page.addView(info(GemmaBridge.isReady(this) ? "Gemma AI 已就緒 ✓" : "Gemma AI 尚未就緒",
-                "V2.0.9 使用 Gemma 4 E4B，先放大切分供應商區、單號日期區與品項表格，再做上半頁交叉驗證。AI 欄位可人工修正。"));
-        if (!GemmaBridge.isReady(this)) {
-            Button model = action("前往安裝 Gemma 模型", BLUE); model.setOnClickListener(v -> startActivity(new Intent(this, GemmaSetupActivity.class))); page.addView(model, margins(5,10));
+        AiModelProvider provider = AiModelRegistry.active(this);
+        boolean aiReady = provider.isReady(this);
+        page.addView(info(aiReady ? provider.displayName() + " 已就緒 ✓" : provider.displayName() + " 尚未就緒",
+                "辨識流程：Google ML Kit 中文 OCR → MiniCPM-V 4.6 看原圖並核對 OCR → 結構化資料 → 可靠度檢查。看不清楚時不猜資料，結果仍可人工修改。"));
+        if (!aiReady) {
+            Button model = action("前往安裝本機 AI 模型", BLUE); model.setOnClickListener(v -> startActivity(new Intent(this, GemmaSetupActivity.class))); page.addView(model, margins(5,10));
         }
 
         page.addView(section("提醒時間"));
@@ -255,7 +258,7 @@ public class AiMainActivity extends Activity {
         Button choose = action(tree.isEmpty()?"選擇 Google Drive 備份資料夾":"更換 Google Drive 備份資料夾",BLUE); choose.setOnClickListener(v -> chooseBackupFolder()); page.addView(choose,margins(5,6));
         Button backup = action("立即備份",GREEN); backup.setEnabled(!tree.isEmpty()); backup.setOnClickListener(v -> backupNow()); page.addView(backup,margins(4,6));
         Button restore = action("從備份 ZIP 還原",Color.rgb(124,58,237)); restore.setOnClickListener(v -> chooseRestore()); page.addView(restore,margins(4,10));
-        page.addView(info("版本 2.0.9","Pixel 10 Pro XL / Android 17 優先；Gemma 4 E4B 完全在手機本機執行，不使用付費 API。"));
+        page.addView(info("版本 2.0.12","AI 已改為 Google ML Kit OCR + MiniCPM-V 4.6；模型下載完成後可在手機本機離線辨識，不使用付費 AI API。"));
         setScreen(page, SETTINGS);
     }
 
@@ -283,7 +286,7 @@ public class AiMainActivity extends Activity {
         PurchaseDbHelper.Purchase p = db.get(id); if (p == null) { showPurchases(); return; }
         detailId = id; screen = DETAIL; itemCompletionRows.clear();
         LinearLayout page = page(); page.addView(topBar("採購單明細", this::showPurchases));
-        page.addView(info("AI 自動填寫，可人工修正", "Gemma 會先填入採購資料；如果 AI 判錯，請直接按下方『修改 AI 辨識結果』修正，不需要重新從零輸入。"));
+        page.addView(info("AI 自動填寫，可人工修正", "ML Kit OCR + MiniCPM-V 4.6 會先填入採購資料；如果辨識錯誤，請按下方『修改 AI 辨識結果』直接修正，不需要重新從零輸入。"));
         Button editAi = action("✎ 修改 AI 辨識結果", BLUE);
         editAi.setOnClickListener(v -> {
             Intent edit = new Intent(this, PurchaseEditActivity.class);
@@ -298,7 +301,7 @@ public class AiMainActivity extends Activity {
         page.addView(aiField("廠商地址", p.location));
         page.addView(aiField("採購單號", p.orderNo));
         page.addView(aiField("採購日期", p.purchaseDate));
-        page.addView(section("AI 品項／數量／交貨日期"));
+        page.addView(section("AI 品項／規格／數量／交貨日期"));
         List<PurchaseDbHelper.PurchaseItem> items = db.listItems(id);
         for (PurchaseDbHelper.PurchaseItem item : items) page.addView(itemCard(item));
 
@@ -348,11 +351,21 @@ public class AiMainActivity extends Activity {
     }
 
     private View aiField(String label, String value) {
-        LinearLayout c=card(Color.WHITE,Color.rgb(191,219,254)); c.addView(txt(label+"　AI",12,BLUE,true)); c.addView(txt(safe(value,"AI 未可靠辨識"),17,NAVY,true)); return c;
+        LinearLayout c=card(Color.WHITE,Color.rgb(191,219,254)); c.addView(txt(label+"　AI",12,BLUE,true)); c.addView(txt(safe(value,"需要人工確認"),17,NAVY,true)); return c;
     }
 
     private void openPhotoPicker() {
         if (AiJobStore.get(this).running()) { showAnalysis(); return; }
+        AiModelProvider provider = AiModelRegistry.active(this);
+        if (!provider.isReady(this)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("本機 AI 模型尚未就緒")
+                    .setMessage("請先下載並驗證 MiniCPM-V 4.6 模型。既有採購資料仍可正常查看與編輯。")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("前往模型下載", (d,w) -> startActivity(new Intent(this, GemmaSetupActivity.class)))
+                    .show();
+            return;
+        }
         Intent i;
         if (Build.VERSION.SDK_INT >= 33) {
             i = new Intent(MediaStore.ACTION_PICK_IMAGES);
@@ -404,11 +417,11 @@ public class AiMainActivity extends Activity {
     private String statusFor(PurchaseDbHelper.Purchase p){String e=earliest(db.listItems(p.id));if(empty(e))return"未設定交貨日";return labelDiff(diffDays(e));}
     private int colorFor(PurchaseDbHelper.Purchase p){String s=statusFor(p);if(s.startsWith("逾期"))return RED;if(s.startsWith("今天"))return ORANGE;if(s.contains("天後"))return AMBER;return BLUE;}
     private String earliest(List<PurchaseDbHelper.PurchaseItem>xs){String e="";for(PurchaseDbHelper.PurchaseItem i:xs)if(!empty(i.deliveryDate)&&(e.isEmpty()||i.deliveryDate.compareTo(e)<0))e=i.deliveryDate;return e;}
-    private String normalizeDate(String s){if(empty(s))return"";String d=PurchaseOcrParser.extractDate(s);return empty(d)?s.trim():d;}
+    private String normalizeDate(String s){if(empty(s))return"";String d=AiJsonParser.normalizeDate(s);if(empty(d))d=PurchaseOcrParser.extractDate(s);return empty(d)?s.trim():d;}
 
-    private View header(){LinearLayout c=card(Color.rgb(219,234,254),BLUE);LinearLayout r=row();ImageView icon=new ImageView(this);icon.setImageResource(R.drawable.ic_app_icon);r.addView(icon,new LinearLayout.LayoutParams(dp(64),dp(64)));LinearLayout t=new LinearLayout(this);t.setOrientation(LinearLayout.VERTICAL);t.setPadding(dp(12),0,0,0);t.addView(txt("全益採購追蹤",25,NAVY,true));t.addView(txt("GEMMA 4 E4B｜可人工修正｜交貨提醒",13,GRAY,true));r.addView(t,weight());c.addView(r);return c;}
-    private View jobCard(AiJobStore.Snapshot s){LinearLayout c=card(Color.WHITE,CYAN);c.addView(txt("Gemma AI 正在背景分析",17,NAVY,true));ProgressBar p=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);p.setMax(100);p.setProgress(s.progress);c.addView(p,marginsRaw(-1,dp(18),7,6));c.addView(txt(s.stage+"　"+s.progress+"%",14,GRAY,false));c.setOnClickListener(v->showAnalysis());return c;}
-    private View lastJobCard(AiJobStore.Snapshot s){String title=AiJobStore.STATE_DONE.equals(s.state)?"上次 AI 分析完成":"上次 AI 分析需處理";LinearLayout c=card(Color.WHITE,s.failed>0?AMBER:GREEN);c.addView(txt(title,16,NAVY,true));c.addView(txt("成功 "+s.success+" 張｜未通過 "+s.failed+" 張",14,GRAY,false));c.setOnClickListener(v->showAnalysis());return c;}
+    private View header(){LinearLayout c=card(Color.rgb(219,234,254),BLUE);LinearLayout r=row();ImageView icon=new ImageView(this);icon.setImageResource(R.drawable.ic_app_icon);r.addView(icon,new LinearLayout.LayoutParams(dp(64),dp(64)));LinearLayout t=new LinearLayout(this);t.setOrientation(LinearLayout.VERTICAL);t.setPadding(dp(12),0,0,0);t.addView(txt("全益採購追蹤",25,NAVY,true));t.addView(txt("ML KIT OCR + MINICPM-V 4.6｜可人工修正｜交貨提醒",12,GRAY,true));r.addView(t,weight());c.addView(r);return c;}
+    private View jobCard(AiJobStore.Snapshot s){LinearLayout c=card(Color.WHITE,CYAN);c.addView(txt("OCR + MiniCPM 正在背景分析",17,NAVY,true));ProgressBar p=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);p.setMax(100);p.setProgress(s.progress);c.addView(p,marginsRaw(-1,dp(18),7,6));c.addView(txt(s.stage+"　"+s.progress+"%",14,GRAY,false));c.setOnClickListener(v->showAnalysis());return c;}
+    private View lastJobCard(AiJobStore.Snapshot s){String title=AiJobStore.STATE_DONE.equals(s.state)?"上次 AI 分析完成":"上次 AI 分析需處理";LinearLayout c=card(Color.WHITE,s.failed>0?AMBER:GREEN);c.addView(txt(title,16,NAVY,true));c.addView(txt("成功 "+s.success+" 張｜需確認 "+s.failed+" 張",14,GRAY,false));c.setOnClickListener(v->showAnalysis());return c;}
     private View status(String label,int count,int color){LinearLayout c=card(color,Color.rgb(15,23,42));c.addView(txt(label,14,Color.WHITE,true));c.addView(txt(String.valueOf(count),30,Color.WHITE,true));c.setOnClickListener(v->showReminders());return c;}
     private View info(String title,String body){LinearLayout c=card(Color.WHITE,Color.rgb(203,213,225));c.addView(txt(title,16,NAVY,true));c.addView(txt(body,14,GRAY,false));return c;}
     private TextView section(String s){TextView v=txt(s,17,NAVY,true);v.setPadding(dp(2),dp(16),dp(2),dp(8));return v;}
