@@ -12,12 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/**
- * Local, user-editable recognition knowledge base.
- *
- * This DB never invents purchase-order values. It only supplies canonical names/addresses/products
- * after matching text evidence, and blocks known own-company names from becoming vendors.
- */
+/** Local, user-editable recognition knowledge base. */
 public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
     private static final String DB_NAME = "tft_recognition_knowledge.db";
     private static final int DB_VERSION = 1;
@@ -30,9 +25,7 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
         public String products = "";
     }
 
-    public RecognitionKnowledgeDb(Context context) {
-        super(context, DB_NAME, null, DB_VERSION);
-    }
+    public RecognitionKnowledgeDb(Context context) { super(context, DB_NAME, null, DB_VERSION); }
 
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE own_aliases (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE)");
@@ -44,8 +37,7 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {}
 
     private static void insertAlias(SQLiteDatabase db, String name) {
-        ContentValues v = new ContentValues();
-        v.put("name", name);
+        ContentValues v = new ContentValues(); v.put("name", name);
         db.insertWithOnConflict("own_aliases", null, v, SQLiteDatabase.CONFLICT_IGNORE);
     }
 
@@ -57,8 +49,7 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
     }
 
     public void saveOwnAliases(List<String> aliases) {
-        SQLiteDatabase db = getWritableDatabase();
-        db.beginTransaction();
+        SQLiteDatabase db = getWritableDatabase(); db.beginTransaction();
         try {
             db.delete("own_aliases", null, null);
             if (aliases != null) {
@@ -68,7 +59,6 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
                     if (x.length() >= 2 && seen.add(x)) insertAlias(db, x);
                 }
             }
-            // Always keep the confirmed own-company name as a safety rule.
             insertAlias(db, "全益畜牧器具公司");
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
@@ -94,10 +84,8 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
     public long upsertVendor(Vendor vendor) {
         if (vendor == null || safe(vendor.name).trim().isEmpty()) return -1;
         ContentValues cv = new ContentValues();
-        cv.put("name", vendor.name.trim());
-        cv.put("address", safe(vendor.address).trim());
-        cv.put("keywords", safe(vendor.keywords).trim());
-        cv.put("products", safe(vendor.products).trim());
+        cv.put("name", vendor.name.trim()); cv.put("address", safe(vendor.address).trim());
+        cv.put("keywords", safe(vendor.keywords).trim()); cv.put("products", safe(vendor.products).trim());
         cv.put("updated_at", System.currentTimeMillis());
         SQLiteDatabase db = getWritableDatabase();
         if (vendor.id > 0) {
@@ -122,11 +110,10 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
     }
 
     public boolean isOwnCompany(String text) {
-        String n = norm(text);
-        if (n.isEmpty()) return false;
+        String n = norm(text); if (n.isEmpty()) return false;
         for (String alias : listOwnAliases()) {
             String a = norm(alias);
-            if (a.length() >= 4 && (n.equals(a) || n.contains(a) || a.contains(n) && n.length() >= 4)) return true;
+            if (a.length() >= 4 && (n.equals(a) || n.contains(a) || (a.contains(n) && n.length() >= 4))) return true;
         }
         return false;
     }
@@ -150,8 +137,7 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
     }
 
     private Vendor findByName(String name) {
-        String q = safe(name).trim();
-        if (q.isEmpty()) return null;
+        String q = safe(name).trim(); if (q.isEmpty()) return null;
         Cursor c = getReadableDatabase().query("vendors", null, "name=?", new String[]{q}, null, null, null);
         try {
             if (!c.moveToFirst()) return null;
@@ -165,7 +151,6 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
         } finally { c.close(); }
     }
 
-    /** Evidence injected into the VLM prompt. Known data is explicitly labelled as hints, not facts from the image. */
     public String buildPromptEvidence() {
         StringBuilder sb = new StringBuilder();
         sb.append("[LOCAL_RECOGNITION_KNOWLEDGE]\n");
@@ -192,17 +177,19 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
         return sb.toString();
     }
 
-    /** Deterministic post-rule: reject own-company vendor; canonicalize a known vendor only with evidence. */
+    /** Reject own-company vendor and canonicalize a known vendor only when observed OCR contains it. */
     public void applyKnownRules(PurchaseOcrParser.ParsedPurchase parsed, String evidence) {
         if (parsed == null) return;
         if (isOwnCompany(parsed.vendor)) {
             parsed.rawText += "\n[KNOWLEDGE_RULE] vendor rejected because it matches own-company alias: " + parsed.vendor;
             parsed.vendor = "";
         }
-        String e = norm(evidence);
+        String observed = safe(evidence);
+        int cut = observed.indexOf("[LOCAL_RECOGNITION_KNOWLEDGE]");
+        if (cut >= 0) observed = observed.substring(0, cut);
+        String e = norm(observed);
         if (e.isEmpty()) return;
-        Vendor matched = null;
-        int matches = 0;
+        Vendor matched = null; int matches = 0;
         for (Vendor v : listVendors()) {
             boolean hit = !norm(v.name).isEmpty() && e.contains(norm(v.name));
             if (!hit) {
@@ -214,7 +201,8 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
             if (hit) { matched = v; matches++; }
         }
         if (matches == 1 && matched != null) {
-            if (safe(parsed.vendor).trim().isEmpty() || isOwnCompany(parsed.vendor) || !e.contains(norm(parsed.vendor))) {
+            String pv = norm(parsed.vendor);
+            if (safe(parsed.vendor).trim().isEmpty() || isOwnCompany(parsed.vendor) || (!pv.isEmpty() && !e.contains(pv))) {
                 parsed.vendor = matched.name;
                 parsed.rawText += "\n[KNOWLEDGE_MATCH] canonical vendor=" + matched.name;
             }
@@ -227,34 +215,24 @@ public final class RecognitionKnowledgeDb extends SQLiteOpenHelper {
 
     private static List<String> splitLines(String s) {
         List<String> out = new ArrayList<>();
-        for (String x : safe(s).split("[\\r\\n]+")) {
-            x = x.trim(); if (!x.isEmpty()) out.add(x);
-        }
+        for (String x : safe(s).split("[\\r\\n]+")) { x=x.trim(); if(!x.isEmpty()) out.add(x); }
         return out;
     }
 
     private static List<String> splitTokens(String s) {
         List<String> out = new ArrayList<>();
-        for (String x : safe(s).split("[,，;；\\r\\n]+")) {
-            x = x.trim(); if (!x.isEmpty()) out.add(x);
-        }
+        for (String x : safe(s).split("[,，;；\\r\\n]+")) { x=x.trim(); if(!x.isEmpty()) out.add(x); }
         return out;
     }
 
     private static String joinLines(Set<String> values, int max) {
-        StringBuilder sb = new StringBuilder(); int n = 0;
-        for (String s : values) {
-            if (++n > max) break;
-            if (sb.length() > 0) sb.append('\n');
-            sb.append(s);
-        }
+        StringBuilder sb = new StringBuilder(); int n=0;
+        for (String s : values) { if(++n>max) break; if(sb.length()>0) sb.append('\n'); sb.append(s); }
         return sb.toString();
     }
 
     private static String norm(String s) {
-        return safe(s).toUpperCase(Locale.TAIWAN)
-                .replaceAll("[\\s　:：,，.。()（）/\\-＿_]+", "")
-                .trim();
+        return safe(s).toUpperCase(Locale.TAIWAN).replaceAll("[\\s　:：,，.。()（）/\\-＿_]+", "").trim();
     }
 
     private static String safe(String s) { return s == null ? "" : s; }
