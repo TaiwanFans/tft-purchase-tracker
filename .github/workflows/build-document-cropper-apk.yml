@@ -30,16 +30,33 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Apply v1.5.1 responsive UI filters and performance
+      - name: Apply v1.5.2 release patches
         working-directory: android-document-cropper
         run: |
           sed -i "s/^guide box')/'guide box')/" patch_v140.py
           python3 patch_v140.py
           python3 patch_v151.py
+          python3 patch_v152.py
+          grep -q "versionName '1.5.2'" app/build.gradle
+          grep -q "HorizontalScrollView" app/src/main/java/com/quanyi/docscanner/MainActivity.java
+          grep -q "取消這次掃描" app/src/main/java/com/quanyi/docscanner/MainActivity.java
+          grep -q "4800f/Math.max(ow,oh)" app/src/main/java/com/quanyi/docscanner/ImageUtils.java
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse('app/src/main/res/drawable/ic_pixel_document.xml')
+          print('v1.5.2 source verification OK')
+          PY
 
       - name: Build debug APK
         working-directory: android-document-cropper
         run: gradle :app:assembleDebug
+
+      - name: Validate APK archive
+        working-directory: android-document-cropper
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          unzip -t app/build/outputs/apk/debug/app-debug.apk >/dev/null
+          echo "APK archive validation OK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
