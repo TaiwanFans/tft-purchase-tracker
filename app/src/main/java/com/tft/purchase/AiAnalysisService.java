@@ -13,12 +13,12 @@ import android.os.IBinder;
 import java.util.ArrayList;
 
 /**
- * Foreground service for long Gemma inference.
- * V2.0.8 guarantees that every analyzed image leaves a visible purchase record.
+ * Foreground service for the replaceable local AI pipeline:
+ * ML Kit OCR -> active AiModelProvider -> validation -> existing purchase database.
  */
 public class AiAnalysisService extends Service {
     public static final String ACTION_UPDATE = "com.tft.purchase.AI_JOB_UPDATE";
-    private static final String CHANNEL = "gemma_analysis_v208";
+    private static final String CHANNEL = "local_ai_analysis_v212";
     private static final int NOTIFICATION_ID = 8235708;
     private volatile boolean processing = false;
     private int created = 0;
@@ -37,7 +37,7 @@ public class AiAnalysisService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         createChannel();
-        startForeground(NOTIFICATION_ID, notification("AI 準備分析採購單", 1, false));
+        startForeground(NOTIFICATION_ID, notification("準備 ML Kit OCR 與本機 AI", 1, false));
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -55,9 +55,12 @@ public class AiAnalysisService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         }
-        if (!GemmaBridge.isReady(this)) {
-            AiJobStore.error(this, "Gemma AI 模型尚未安裝完成");
-            publish("Gemma 模型尚未就緒", 100, true);
+
+        AiModelProvider provider = AiModelRegistry.active(this);
+        if (!provider.isReady(this)) {
+            String msg = provider.displayName() + " 模型尚未下載並驗證完成";
+            AiJobStore.error(this, msg);
+            publish(msg, 100, true);
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -75,7 +78,7 @@ public class AiAnalysisService extends Service {
             AiJobStore.done(this, created, warnings);
             String msg;
             if (created <= 0) msg = "AI 分析結束，但沒有建立採購單";
-            else if (warnings > 0) msg = "已建立 " + created + " 張採購單；" + warnings + " 張建議重新 AI 分析";
+            else if (warnings > 0) msg = "已建立 " + created + " 張採購單；" + warnings + " 張需要人工確認";
             else msg = "已建立 " + created + " 張採購單，點此查看";
             publish(msg, 100, true);
             sendUpdate();
@@ -87,39 +90,60 @@ public class AiAnalysisService extends Service {
         final int total = paths.size();
         final int base = (int)((index * 100f) / total);
         final int span = Math.max(1, 100 / total);
-        AiJobStore.progress(this, Math.max(1, base + 2),
-                "第 " + (index + 1) + "/" + total + " 張：準備 AI",
-                index + 1, total, created, 0);
-        publish("第 " + (index + 1) + "/" + total + " 張：準備 AI", Math.max(1, base + 2), false);
-        sendUpdate();
 
-        GemmaBridge.analyzeAdvanced(this, path, (percent, stage) -> {
-            int overall = Math.min(98, base + Math.max(1, (int)(span * (percent / 100f))));
+        updateJob(base + 2, "第 " + (index + 1) + "/" + total + " 張｜Google ML Kit OCR 讀取文字",
+                index, total);
+
+        MlKitOcrBridge.recognize(this, path, new MlKitOcrBridge.Callback() {
+            @Override public void onSuccess(String ocrText) {
+                updateJob(base + Math.max(3, span * 18 / 100),
+                        "第 " + (index + 1) + "/" + total + " 張｜OCR 完成，交給本機 MiniCPM 理解",
+                        index, total);
+                runLocalModel(paths, index, replaceId, path, ocrText == null ? "" : ocrText, total, base, span);
+            }
+
+            @Override public void onFailure(String error) {
+                // Do not lose the purchase photo if OCR fails. MiniCPM can still inspect the image itself.
+                updateJob(base + Math.max(3, span * 18 / 100),
+                        "第 " + (index + 1) + "/" + total + " 張｜OCR 未完成，改由圖片 AI 判讀",
+                        index, total);
+                runLocalModel(paths, index, replaceId, path, "", total, base, span);
+            }
+        });
+    }
+
+    private void runLocalModel(ArrayList<String> paths, int index, long replaceId, String path,
+                               String ocrText, int total, int base, int span) {
+        AiModelProvider provider = AiModelRegistry.active(this);
+        provider.analyze(this, path, ocrText, (percent, stage) -> {
+            int modelStart = 20;
+            int modelSpan = 75;
+            int mapped = modelStart + Math.max(0, Math.min(modelSpan, percent * modelSpan / 100));
+            int overall = Math.min(98, base + Math.max(1, (int)(span * (mapped / 100f))));
             String text = "第 " + (index + 1) + "/" + total + " 張｜" + stage;
             AiJobStore.progress(this, overall, text, index + 1, total, created, 0);
             publish(text, overall, false);
             sendUpdate();
-        }, new GemmaAiCallback() {
+        }, new AiModelCallback() {
             @Override public void onSuccess(String response) {
                 try {
-                    PurchaseOcrParser.ParsedPurchase parsed = GemmaJsonParser.parseGemmaOnly(response);
+                    PurchaseOcrParser.ParsedPurchase parsed = AiJsonParser.parse(response, ocrText);
                     AiResultValidator.Validation validation = AiResultValidator.validateAndSanitize(parsed);
                     boolean reliable = validation.reliable;
                     long id = saveParsed(parsed, path,
                             replaceId > 0 && total == 1 ? replaceId : -1,
-                            reliable,
-                            validation.message);
+                            reliable, validation.message);
                     created++;
                     if (!reliable) warnings++;
                     AiJobStore.appendId(AiAnalysisService.this, id);
                     String stage = reliable
                             ? "第 " + (index + 1) + " 張已建立採購單 ✓"
-                            : "第 " + (index + 1) + " 張已建立；部分欄位建議重新 AI 分析";
+                            : "第 " + (index + 1) + " 張已建立；不確定欄位需要人工確認";
                     AiJobStore.progress(AiAnalysisService.this, Math.min(98, base + span - 1),
                             stage, index + 1, total, created, 0);
+                    publish(stage, Math.min(98, base + span - 1), false);
                     sendUpdate();
                 } catch (Throwable t) {
-                    // Never let an analyzed image disappear. Leave a retryable record with the original image.
                     try {
                         long id = savePlaceholder(path,
                                 replaceId > 0 && total == 1 ? replaceId : -1,
@@ -136,18 +160,25 @@ public class AiAnalysisService extends Service {
                 try {
                     long id = savePlaceholder(path,
                             replaceId > 0 && total == 1 ? replaceId : -1,
-                            "Gemma AI 分析失敗：" + (error == null ? "未知錯誤" : error));
+                            error == null ? "本機 AI 分析失敗" : error);
                     created++;
                     warnings++;
                     AiJobStore.appendId(AiAnalysisService.this, id);
                     AiJobStore.progress(AiAnalysisService.this, Math.min(98, base + span - 1),
-                            "第 " + (index + 1) + " 張已留下原圖，可從採購單內重新 AI 分析",
+                            "第 " + (index + 1) + " 張已留下原圖，可重新 AI 分析",
                             index + 1, total, created, 0);
                     sendUpdate();
                 } catch (Throwable ignored) {}
                 processNext(paths, index + 1, replaceId);
             }
         });
+    }
+
+    private void updateJob(int progress, String text, int index, int total) {
+        int p = Math.max(1, Math.min(98, progress));
+        AiJobStore.progress(this, p, text, index + 1, total, created, 0);
+        publish(text, p, false);
+        sendUpdate();
     }
 
     private long savePlaceholder(String imagePath, long replaceId, String reason) {
@@ -224,8 +255,8 @@ public class AiAnalysisService extends Service {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if (nm == null) return;
-        NotificationChannel c = new NotificationChannel(CHANNEL, "Gemma AI 採購單分析", NotificationManager.IMPORTANCE_LOW);
-        c.setDescription("採購單在背景進行 AI 辨識時顯示進度");
+        NotificationChannel c = new NotificationChannel(CHANNEL, "本機 AI 採購單分析", NotificationManager.IMPORTANCE_LOW);
+        c.setDescription("ML Kit OCR 與本機 MiniCPM-V 分析採購單時顯示進度");
         c.setSound(null, null);
         nm.createNotificationChannel(c);
     }
@@ -239,7 +270,7 @@ public class AiAnalysisService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         b.setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(finished ? "全益採購追蹤｜AI 結果已建立" : "全益採購追蹤｜Gemma AI 分析中")
+                .setContentTitle(finished ? "全益採購追蹤｜AI 結果已建立" : "全益採購追蹤｜OCR + MiniCPM 分析中")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOnlyAlertOnce(true)
