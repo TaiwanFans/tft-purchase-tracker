@@ -16,10 +16,10 @@ public final class AiJsonParser {
     public static PurchaseOcrParser.ParsedPurchase parse(String response, String ocrEvidence) {
         PurchaseOcrParser.ParsedPurchase out = new PurchaseOcrParser.ParsedPurchase();
         StringBuilder raw = new StringBuilder();
-        raw.append("[AI_MODEL:MiniCPM-V 4.6 + ML Kit OCR]\n");
+        raw.append("[AI_MODEL:MiniCPM-V 4.6 + PP-OCRv6 Medium tiled + ML Kit + local knowledge]\n");
         if (ocrEvidence != null && !ocrEvidence.trim().isEmpty()) {
             String o = ocrEvidence.trim();
-            if (o.length() > 8000) o = o.substring(0, 8000);
+            if (o.length() > 16000) o = o.substring(0, 16000);
             raw.append("[OCR_EVIDENCE]\n").append(o).append("\n[/OCR_EVIDENCE]\n");
         }
         raw.append("[MODEL_JSON]\n").append(response == null ? "" : response);
@@ -73,6 +73,11 @@ public final class AiJsonParser {
         }
 
         if (confirm.length() > 0) out.rawText += "\n[NEEDS_CONFIRMATION]\n" + confirm;
+        try {
+            if (TftApplication.appContext() != null) {
+                new RecognitionKnowledgeDb(TftApplication.appContext()).applyKnownRules(out, ocrEvidence);
+            }
+        } catch (Throwable ignored) {}
         return out;
     }
 
