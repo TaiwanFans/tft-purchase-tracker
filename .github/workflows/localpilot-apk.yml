@@ -33,7 +33,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: LocalPilot-v0.4.1-fixed-apk
+          name: LocalPilot-v0.5-safe-boot-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
