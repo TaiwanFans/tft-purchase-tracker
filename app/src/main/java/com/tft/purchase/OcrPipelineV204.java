@@ -8,8 +8,8 @@ import java.io.FileOutputStream;
 import java.util.UUID;
 
 /**
- * Legacy compatibility entry point. It now delegates to the same replaceable pipeline used by
- * AiAnalysisService: ML Kit OCR first, then the active local AiModelProvider.
+ * Legacy compatibility entry point. It delegates to V2.0.13's hybrid OCR pipeline:
+ * document correction -> PP-OCRv6 Small + ML Kit -> active local AiModelProvider.
  */
 public final class OcrPipelineV204 {
     private OcrPipelineV204() {}
@@ -40,19 +40,21 @@ public final class OcrPipelineV204 {
         try {
             temp = new File(context.getCacheDir(), "purchase_ai_" + UUID.randomUUID() + ".jpg");
             try (FileOutputStream fos = new FileOutputStream(temp)) {
-                if (!source.compress(Bitmap.CompressFormat.JPEG, 96, fos)) {
+                if (!source.compress(Bitmap.CompressFormat.JPEG, 97, fos)) {
                     throw new Exception("AI 暫存圖片失敗");
                 }
             }
             final File imageFile = temp;
-            MlKitOcrBridge.recognize(context, imageFile.getAbsolutePath(), new MlKitOcrBridge.Callback() {
-                @Override public void onSuccess(String text) {
-                    runModel(context, provider, imageFile, text, callback);
+            HybridOcrBridge.recognize(context, imageFile.getAbsolutePath(), new HybridOcrBridge.Callback() {
+                @Override public void onSuccess(HybridOcrBridge.Result result) {
+                    String modelPath = result.preparedImagePath == null || result.preparedImagePath.isEmpty()
+                            ? imageFile.getAbsolutePath() : result.preparedImagePath;
+                    runModel(context, provider, imageFile, modelPath, result.evidence, result, callback);
                 }
 
                 @Override public void onFailure(String error) {
-                    // MiniCPM can still inspect the original image when OCR itself fails.
-                    runModel(context, provider, imageFile, "", callback);
+                    runModel(context, provider, imageFile, imageFile.getAbsolutePath(),
+                            "[OCR_ERROR] " + (error == null ? "雙 OCR 未完成" : error), null, callback);
                 }
             });
         } catch (Throwable t) {
@@ -61,22 +63,25 @@ public final class OcrPipelineV204 {
         }
     }
 
-    private static void runModel(Context context, AiModelProvider provider, File imageFile,
-                                 String ocrText, Callback callback) {
-        provider.analyze(context, imageFile.getAbsolutePath(), ocrText, null, new AiModelCallback() {
+    private static void runModel(Context context, AiModelProvider provider, File originalTemp,
+                                 String modelImagePath, String ocrEvidence,
+                                 HybridOcrBridge.Result hybridResult, Callback callback) {
+        provider.analyze(context, modelImagePath, ocrEvidence, null, new AiModelCallback() {
             @Override public void onSuccess(String response) {
                 try {
-                    PurchaseOcrParser.ParsedPurchase parsed = AiJsonParser.parse(response, ocrText);
+                    PurchaseOcrParser.ParsedPurchase parsed = AiJsonParser.parse(response, ocrEvidence);
                     callback.onSuccess(parsed);
                 } catch (Throwable t) {
                     callback.onFailure(t instanceof Exception ? (Exception)t : new Exception(t));
                 } finally {
-                    try { imageFile.delete(); } catch (Throwable ignored) {}
+                    if (hybridResult != null) hybridResult.cleanup();
+                    try { originalTemp.delete(); } catch (Throwable ignored) {}
                 }
             }
 
             @Override public void onFailure(String error) {
-                try { imageFile.delete(); } catch (Throwable ignored) {}
+                if (hybridResult != null) hybridResult.cleanup();
+                try { originalTemp.delete(); } catch (Throwable ignored) {}
                 callback.onFailure(new Exception(error == null ? "本機 AI 分析失敗" : error));
             }
         });
