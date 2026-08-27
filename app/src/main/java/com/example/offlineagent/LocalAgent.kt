@@ -10,7 +10,6 @@ import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.SamplerConfig
 import org.json.JSONObject
 
-
 data class RuntimeInfo(
     val backend: String,
     val multimodal: Boolean,
@@ -104,8 +103,7 @@ class LocalAgent(
                             topP = 0.9,
                             temperature = 0.25
                         ),
-                        automaticToolCalling = false,
-                        maxOutputToken = 1024
+                        automaticToolCalling = false
                     )
                 )
                 return runtimeInfo
