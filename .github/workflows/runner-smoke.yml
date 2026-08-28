@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Linux runner is alive
         run: |
-          echo "linux-runner-ok"
+          echo "linux-runner-ok-after-fix"
           uname -a
 
   smoke-macos:
@@ -19,5 +19,5 @@ jobs:
     steps:
       - name: macOS runner is alive
         run: |
-          echo "macos-runner-ok"
+          echo "macos-runner-ok-after-fix"
           uname -a
