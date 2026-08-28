@@ -11,5 +11,5 @@ jobs:
     steps:
       - name: Runner is alive
         run: |
-          echo "runner-ok"
+          echo "runner-ok-after-billing-check"
           uname -a
