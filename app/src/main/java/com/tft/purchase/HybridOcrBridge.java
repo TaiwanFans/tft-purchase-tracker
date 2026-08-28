@@ -6,8 +6,8 @@ import java.io.File;
 
 /**
  * High-accuracy OCR entry point.
- * V2.0.16: document correction -> enlarged numbered tiles -> dual OCR -> global coordinates ->
- * conflict-only visual inspection sheet for the replaceable local AI provider.
+ * V2.0.17: document correction -> H1/H2/R1-R4 enlarged tiles -> dual OCR -> global coordinates ->
+ * representative high-resolution visual inspection sheet for the replaceable local AI provider.
  */
 public final class HybridOcrBridge {
     private HybridOcrBridge() {}
@@ -18,7 +18,7 @@ public final class HybridOcrBridge {
 
     public static final class Result {
         public final String evidence;
-        /** Small conflict/low-confidence inspection sheet, not the whole A4 page. */
+        /** Representative high-resolution sheet plus OCR conflict/low-confidence close-ups. */
         public final String preparedImagePath;
         private final DocumentPreprocessor.Prepared prepared;
         private final String inspectionPath;
@@ -58,7 +58,7 @@ public final class HybridOcrBridge {
         try {
             emitProgress(progress, 12, "正在找出紙張邊界、透視校正、去陰影與去噪");
             prepared = DocumentPreprocessor.prepare(app, sourcePath);
-            emitProgress(progress, 20, "文件校正完成，準備切割 H1/H2/R1/R2/R3");
+            emitProgress(progress, 20, "文件校正完成，準備切割 H1/H2/R1/R2/R3/R4");
         } catch (Throwable t) {
             callback.onFailure("採購單影像前處理失敗：" + safe(t));
             return;
@@ -70,17 +70,17 @@ public final class HybridOcrBridge {
             }
 
             @Override public void onSuccess(String evidence) {
-                emitProgress(progress, 87, "雙 OCR 座標與衝突資料已重組，正在準備 AI 局部核對區");
+                emitProgress(progress, 87, "雙 OCR 座標與衝突資料已重組，正在準備 AI 高解析核對區");
                 String enriched = evidence + "\n" + new RecognitionKnowledgeDb(app).buildPromptEvidence();
                 String inspection = "";
                 try {
                     inspection = AiInspectionImageBuilder.build(app, prepared.visionPath, evidence);
                 } catch (Throwable t) {
-                    // Safe fallback: the AI may inspect the corrected page only if conflict-crop assembly failed.
-                    enriched += "\n[AI_INSPECTION_FALLBACK] local crop builder failed: " + safe(t);
+                    // Safe fallback: AI may inspect the corrected page only if crop-sheet assembly fails.
+                    enriched += "\n[AI_INSPECTION_FALLBACK] high-resolution crop builder failed: " + safe(t);
                     inspection = prepared.visionPath;
                 }
-                emitProgress(progress, 89, "OCR 階段完成；AI 只核對衝突／低信心局部圖片");
+                emitProgress(progress, 89, "OCR 完成；AI 正在核對固定高解析區＋衝突局部圖");
                 callback.onSuccess(new Result(enriched, prepared, inspection));
             }
 
@@ -126,7 +126,6 @@ public final class HybridOcrBridge {
         if (!s.ml.isEmpty()) ev.append(s.ml).append('\n');
         ev.append(new RecognitionKnowledgeDb(context).buildPromptEvidence());
         emitProgress(progress, 86, "整頁雙 OCR 備援完成，重要欄位將強制人工確認");
-        // Fallback really needs the corrected page because tiled spatial conflicts were unavailable.
         callback.onSuccess(new Result(ev.toString(), prepared, prepared.visionPath));
     }
 
