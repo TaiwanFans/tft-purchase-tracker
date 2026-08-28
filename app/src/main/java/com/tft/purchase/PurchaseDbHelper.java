@@ -11,7 +11,7 @@ import java.util.List;
 
 public class PurchaseDbHelper extends SQLiteOpenHelper {
     private static final String DB_NAME = "tft_purchase.db";
-    private static final int DB_VERSION = 2;
+    private static final int DB_VERSION = 3;
 
     public static class Purchase {
         public long id;
@@ -34,6 +34,7 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
         public long purchaseId;
         public String lineNo = "";
         public String description = "";
+        public String specification = "";
         public String quantity = "";
         public String unit = "";
         public String unitPrice = "";
@@ -49,6 +50,7 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
         public String vendorName = "";
         public String orderNo = "";
         public String description = "";
+        public String specification = "";
         public String quantity = "";
         public String unit = "";
         public String subtotal = "";
@@ -90,6 +92,7 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
                 "purchase_id INTEGER NOT NULL," +
                 "line_no TEXT," +
                 "description TEXT," +
+                "specification TEXT DEFAULT ''," +
                 "quantity TEXT," +
                 "unit TEXT," +
                 "unit_price TEXT," +
@@ -106,6 +109,9 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
         if (oldVersion < 2) {
             try { db.execSQL("ALTER TABLE purchases ADD COLUMN order_no TEXT DEFAULT ''"); } catch (Exception ignored) {}
             createItemTable(db);
+        }
+        if (oldVersion < 3) {
+            try { db.execSQL("ALTER TABLE purchase_items ADD COLUMN specification TEXT DEFAULT ''"); } catch (Exception ignored) {}
         }
     }
 
@@ -192,6 +198,7 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
         v.put("purchase_id", i.purchaseId);
         v.put("line_no", i.lineNo);
         v.put("description", i.description);
+        v.put("specification", i.specification);
         v.put("quantity", i.quantity);
         v.put("unit", i.unit);
         v.put("unit_price", i.unitPrice);
@@ -205,7 +212,7 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
     public List<DueItem> listDueItems() {
         List<DueItem> out = new ArrayList<>();
         String sql = "SELECT p.id AS purchase_id,p.vendor_name,p.order_no,p.completed AS p_completed," +
-                "i.id AS item_id,i.description,i.quantity,i.unit,i.subtotal,i.delivery_date,i.completed AS i_completed " +
+                "i.id AS item_id,i.description,i.specification,i.quantity,i.unit,i.subtotal,i.delivery_date,i.completed AS i_completed " +
                 "FROM purchase_items i JOIN purchases p ON p.id=i.purchase_id " +
                 "WHERE i.delivery_date IS NOT NULL AND i.delivery_date<>'' " +
                 "ORDER BY i.delivery_date ASC,p.vendor_name ASC";
@@ -218,6 +225,7 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
                 d.vendorName = safe(c.getString(c.getColumnIndexOrThrow("vendor_name")));
                 d.orderNo = safe(c.getString(c.getColumnIndexOrThrow("order_no")));
                 d.description = safe(c.getString(c.getColumnIndexOrThrow("description")));
+                d.specification = safe(c.getString(c.getColumnIndexOrThrow("specification")));
                 d.quantity = safe(c.getString(c.getColumnIndexOrThrow("quantity")));
                 d.unit = safe(c.getString(c.getColumnIndexOrThrow("unit")));
                 d.subtotal = safe(c.getString(c.getColumnIndexOrThrow("subtotal")));
@@ -294,6 +302,8 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
         i.purchaseId = c.getLong(c.getColumnIndexOrThrow("purchase_id"));
         i.lineNo = safe(c.getString(c.getColumnIndexOrThrow("line_no")));
         i.description = safe(c.getString(c.getColumnIndexOrThrow("description")));
+        int specIdx = c.getColumnIndex("specification");
+        i.specification = specIdx >= 0 ? safe(c.getString(specIdx)) : "";
         i.quantity = safe(c.getString(c.getColumnIndexOrThrow("quantity")));
         i.unit = safe(c.getString(c.getColumnIndexOrThrow("unit")));
         i.unitPrice = safe(c.getString(c.getColumnIndexOrThrow("unit_price")));
