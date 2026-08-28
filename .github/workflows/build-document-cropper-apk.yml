@@ -45,6 +45,7 @@ jobs:
           python3 patch_v156.py
           python3 patch_v157.py
           python3 patch_v158.py
+          python3 patch_v158_fix.py
           python3 - <<'PY'
           from pathlib import Path
           import xml.etree.ElementTree as ET
@@ -57,6 +58,7 @@ jobs:
           assert "versionName '1.5.8'" in build and 'versionCode 158' in build
           assert 'prepareAiBatchForPreview' in main
           assert 'buildPreviewDocumentBitmap' in main and 'previewQualityMaxDimension' in main
+          assert 'buildFinalDocumentBitmap' in main
           assert '按住對比｜查看原圖' in main and 'compareOriginalBitmap' in main
           assert '增強銳化' in main
           assert 'setImageBitmapKeepTransform' in zoom
@@ -70,6 +72,7 @@ jobs:
           assert 'buildSnapEdgeMap' in crop and 'snapEdgeToDocument' in crop
           # Preserve HQ output/detection architecture.
           assert 'loadBitmapExact' in main and 'outputMaxDimension()' in main
+          assert 'ImageUtils.perspectiveCrop(original, points, outputMaxDimension())' in main
           assert 'nearFramePenalty' in image
           assert 'perspectiveCrop(Bitmap src, PointF[] p, int maxOutputDim)' in image
           ET.parse('app/src/main/res/drawable/ic_pixel_document.xml')
