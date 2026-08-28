@@ -15,18 +15,17 @@ import java.util.ArrayList;
 /** Foreground service for the offline document/OCR/AI/validation pipeline. */
 public class AiAnalysisService extends Service {
     public static final String ACTION_UPDATE = "com.tft.purchase.AI_JOB_UPDATE";
-    private static final String CHANNEL = "local_ai_analysis_v216";
+    private static final String CHANNEL = "local_ai_analysis_v217";
     private static final int NOTIFICATION_ID = 8235708;
     private volatile boolean processing = false;
     private int created = 0;
     private int warnings = 0;
 
+    /** Start a fresh job or append these photos to the currently-running persistent queue. */
     public static void start(Context context, ArrayList<String> imagePaths, long replaceId) {
         if (imagePaths == null || imagePaths.isEmpty()) return;
-        AiJobStore.begin(context, imagePaths, replaceId);
+        AiJobStore.enqueue(context, imagePaths, replaceId);
         Intent i = new Intent(context, AiAnalysisService.class);
-        i.putStringArrayListExtra("paths", imagePaths);
-        i.putExtra("replace_id", replaceId);
         if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(i);
         else context.startService(i);
     }
@@ -34,21 +33,13 @@ public class AiAnalysisService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         createChannel();
-        startForeground(NOTIFICATION_ID, notification("準備文件校正與分區雙 OCR", 1, false));
+        startForeground(NOTIFICATION_ID, notification("準備 AI 分析排隊工作", 1, false));
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (processing) return START_STICKY;
-        ArrayList<String> paths = intent == null ? null : intent.getStringArrayListExtra("paths");
-        long replaceId = intent == null ? -1 : intent.getLongExtra("replace_id", -1);
         AiJobStore.Snapshot snapshot = AiJobStore.get(this);
-        if (paths == null || paths.isEmpty()) {
-            if (snapshot.running() && snapshot.paths != null && !snapshot.paths.isEmpty()) {
-                paths = new ArrayList<>(snapshot.paths);
-                replaceId = snapshot.replaceId;
-            }
-        }
-        if (paths == null || paths.isEmpty()) {
+        if (!snapshot.running() || snapshot.queue.isEmpty()) {
             stopSelf();
             return START_NOT_STICKY;
         }
@@ -63,90 +54,81 @@ public class AiAnalysisService extends Service {
         }
 
         processing = true;
-        created = snapshot.running() ? snapshot.success : 0;
-        warnings = snapshot.running() ? snapshot.warningCount : 0;
-        int resumeIndex = snapshot.running() ? Math.max(0, Math.min(paths.size(), snapshot.nextIndex)) : 0;
-        if (resumeIndex > 0) publish("背景服務已恢復，從第 " + (resumeIndex + 1) + " 張繼續", 2, false);
-        processNext(paths, resumeIndex, replaceId);
+        created = snapshot.success;
+        warnings = snapshot.warningCount;
+        int resumeIndex = Math.max(0, Math.min(snapshot.queue.size(), snapshot.nextIndex));
+        if (resumeIndex > 0) publish("背景服務已恢復，從排隊第 " + (resumeIndex + 1) + " 張繼續", overallFor(resumeIndex, 1), false);
+        processNext(resumeIndex);
         return START_STICKY;
     }
 
-    private void processNext(ArrayList<String> paths, int index, long replaceId) {
-        if (index >= paths.size()) {
+    /** Always reload the queue before starting the next item, so newly-added/reordered waiting items take effect. */
+    private void processNext(int index) {
+        AiJobStore.Snapshot snapshot = AiJobStore.get(this);
+        if (!snapshot.running()) {
+            processing = false;
+            stopSelf();
+            return;
+        }
+
+        if (index >= snapshot.queue.size()) {
+            // Reload once more to close the tiny race where a photo was appended exactly between items.
+            AiJobStore.Snapshot verify = AiJobStore.get(this);
+            if (index < verify.queue.size()) {
+                processNext(index);
+                return;
+            }
             processing = false;
             AiJobStore.done(this, created, warnings);
             String msg;
             if (created <= 0) msg = "AI 分析結束，但沒有建立採購單";
-            else if (warnings > 0) msg = "已建立 " + created + " 張採購單；" + warnings + " 張需要人工確認";
-            else msg = "已建立 " + created + " 張採購單，點此查看";
+            else if (warnings > 0) msg = "排隊完成：已建立 " + created + " 張；" + warnings + " 張需要人工確認";
+            else msg = "排隊完成：已建立 " + created + " 張採購單";
             publish(msg, 100, true);
             sendUpdate();
             stopSelf();
             return;
         }
 
-        final String originalPath = paths.get(index);
-        final int total = paths.size();
-        final int base = (int)((index * 100f) / total);
-        final int span = Math.max(1, 100 / total);
-
-        updateJob(base + Math.max(1, span * 4 / 100),
-                "第 " + (index + 1) + "/" + total + " 張｜準備文件辨識",
-                index, total);
+        final AiJobStore.QueueItem item = snapshot.queue.get(index);
+        final String originalPath = item.path;
+        final int total = snapshot.queue.size();
+        updateJob(index, 3, "第 " + (index + 1) + "/" + total + " 張｜準備文件辨識");
 
         HybridOcrBridge.recognize(this, originalPath, (percent, stage) -> {
-            int overall = Math.min(89, base + Math.max(1, Math.round(span * (percent / 100f))));
-            String text = "第 " + (index + 1) + "/" + total + " 張｜" + stage;
-            AiJobStore.progress(this, overall, text, index + 1, total, created, 0);
-            publish(text, overall, false);
-            sendUpdate();
+            int itemProgress = 5 + Math.max(0, Math.min(75, percent * 75 / 100));
+            String text = positionText(index) + "｜" + stage;
+            updateJob(index, itemProgress, text);
         }, new HybridOcrBridge.Callback() {
             @Override public void onSuccess(HybridOcrBridge.Result result) {
                 String modelImage = result.preparedImagePath == null || result.preparedImagePath.isEmpty()
                         ? originalPath : result.preparedImagePath;
-                runLocalModel(paths, index, replaceId, originalPath, modelImage,
-                        result.evidence, result, total, base, span);
+                runLocalModel(index, item, originalPath, modelImage, result.evidence, result);
             }
 
             @Override public void onFailure(String error) {
-                // OCR failure still creates a retry record. MiniCPM may inspect the original image, but the
-                // resulting record is always marked for confirmation and the photo is never discarded.
                 String evidence = "[OCR_ERROR] " + (error == null ? "雙 OCR 未完成" : error);
-                updateJob(base + Math.max(1, span * 72 / 100),
-                        "第 " + (index + 1) + "/" + total + " 張｜OCR 未完成，保留原圖並嘗試本機 AI",
-                        index, total);
-                runLocalModel(paths, index, replaceId, originalPath, originalPath,
-                        evidence, null, total, base, span);
+                updateJob(index, 78, positionText(index) + "｜OCR 未完成，保留原圖並嘗試本機 AI");
+                runLocalModel(index, item, originalPath, originalPath, evidence, null);
             }
         });
     }
 
-    private void runLocalModel(ArrayList<String> paths, int index, long replaceId,
+    private void runLocalModel(int index, AiJobStore.QueueItem item,
                                String originalPath, String modelImagePath, String ocrEvidence,
-                               HybridOcrBridge.Result hybridResult,
-                               int total, int base, int span) {
+                               HybridOcrBridge.Result hybridResult) {
         AiModelProvider provider = AiModelRegistry.active(this);
         provider.analyze(this, modelImagePath, ocrEvidence, (percent, stage) -> {
-            int modelStart = 89;
-            int modelSpan = 8;
-            int mapped = modelStart + Math.max(0, Math.min(modelSpan, percent * modelSpan / 100));
-            int overall = Math.min(97, base + Math.max(1, (int)(span * (mapped / 100f))));
-            String text = "第 " + (index + 1) + "/" + total + " 張｜" + stage;
-            AiJobStore.progress(this, overall, text, index + 1, total, created, 0);
-            publish(text, overall, false);
-            sendUpdate();
+            int itemProgress = 82 + Math.max(0, Math.min(13, percent * 13 / 100));
+            updateJob(index, itemProgress, positionText(index) + "｜" + stage);
         }, new AiModelCallback() {
             @Override public void onSuccess(String response) {
                 try {
-                    updateJob(Math.min(98, base + Math.max(1, span * 97 / 100)),
-                            "第 " + (index + 1) + "/" + total + " 張｜規則驗證：我方公司、日期、數量與金額",
-                            index, total);
+                    updateJob(index, 97, positionText(index) + "｜規則驗證：我方公司、日期、數量與金額");
                     PurchaseOcrParser.ParsedPurchase parsed = AiJsonParser.parse(response, ocrEvidence);
                     AiResultValidator.Validation validation = AiResultValidator.validateAndSanitize(parsed);
                     boolean reliable = validation.reliable;
-                    long id = saveParsed(parsed, originalPath,
-                            replaceId > 0 && total == 1 ? replaceId : -1,
-                            reliable, validation.message);
+                    long id = saveParsed(parsed, originalPath, item.replaceId, reliable, validation.message);
                     created++;
                     if (!reliable) warnings++;
                     AiJobStore.appendId(AiAnalysisService.this, id);
@@ -154,14 +136,10 @@ public class AiAnalysisService extends Service {
                     String stage = reliable
                             ? "第 " + (index + 1) + " 張已建立採購單 ✓"
                             : "第 " + (index + 1) + " 張已建立；衝突／不確定欄位需要人工確認";
-                    AiJobStore.progress(AiAnalysisService.this, Math.min(99, base + span - 1),
-                            stage, index + 1, total, created, 0);
-                    publish(stage, Math.min(99, base + span - 1), false);
-                    sendUpdate();
+                    updateJob(index, 99, stage);
                 } catch (Throwable t) {
                     try {
-                        long id = savePlaceholder(originalPath,
-                                replaceId > 0 && total == 1 ? replaceId : -1,
+                        long id = savePlaceholder(originalPath, item.replaceId,
                                 "AI 結果處理失敗：" + safeMessage(t), ocrEvidence);
                         created++;
                         warnings++;
@@ -173,35 +151,45 @@ public class AiAnalysisService extends Service {
                 } finally {
                     if (hybridResult != null) hybridResult.cleanup();
                 }
-                processNext(paths, index + 1, replaceId);
+                processNext(index + 1);
             }
 
             @Override public void onFailure(String error) {
                 try {
-                    long id = savePlaceholder(originalPath,
-                            replaceId > 0 && total == 1 ? replaceId : -1,
+                    long id = savePlaceholder(originalPath, item.replaceId,
                             error == null ? "本機 AI 分析失敗" : error, ocrEvidence);
                     created++;
                     warnings++;
                     AiJobStore.appendId(AiAnalysisService.this, id);
                     AiJobStore.checkpointNextIndex(AiAnalysisService.this, index + 1, created, warnings);
-                    AiJobStore.progress(AiAnalysisService.this, Math.min(99, base + span - 1),
-                            "第 " + (index + 1) + " 張已留下原圖＋OCR 原始資料，可重新 AI 分析",
-                            index + 1, total, created, 0);
-                    sendUpdate();
+                    updateJob(index, 99, "第 " + (index + 1) + " 張已留下原圖＋OCR 原始資料，可重新 AI 分析");
                 } catch (Throwable persistError) {
                     AiJobStore.error(AiAnalysisService.this, "AI 失敗且無法建立重試紀錄：" + safeMessage(persistError));
                 } finally {
                     if (hybridResult != null) hybridResult.cleanup();
                 }
-                processNext(paths, index + 1, replaceId);
+                processNext(index + 1);
             }
         });
     }
 
-    private void updateJob(int progress, String text, int index, int total) {
-        int p = Math.max(1, Math.min(99, progress));
-        AiJobStore.progress(this, p, text, index + 1, total, created, 0);
+    private String positionText(int index) {
+        int total = Math.max(index + 1, AiJobStore.get(this).queue.size());
+        return "第 " + (index + 1) + "/" + total + " 張";
+    }
+
+    private int overallFor(int index, int itemProgress) {
+        int total = Math.max(index + 1, AiJobStore.get(this).queue.size());
+        float doneUnits = index + Math.max(0, Math.min(100, itemProgress)) / 100f;
+        int overall = Math.round(doneUnits * 100f / Math.max(1, total));
+        return Math.max(1, Math.min(99, overall));
+    }
+
+    private void updateJob(int index, int itemProgress, String text) {
+        AiJobStore.Snapshot live = AiJobStore.get(this);
+        int total = Math.max(index + 1, live.queue.size());
+        int p = overallFor(index, itemProgress);
+        AiJobStore.progress(this, p, text, index + 1, total, created, warnings, itemProgress);
         publish(text, p, false);
         sendUpdate();
     }
@@ -229,7 +217,6 @@ public class AiAnalysisService extends Service {
         boolean preservedCompleted = p.completed;
 
         p.vendorName = parsed.vendor == null ? "" : parsed.vendor;
-        // Absolute DB-boundary guard. This is deliberately duplicated after AI validation.
         if (AiResultValidator.isSelfCompany(p.vendorName)) {
             p.vendorName = "";
             reliable = false;
@@ -291,14 +278,14 @@ public class AiAnalysisService extends Service {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if (nm == null) return;
-        NotificationChannel c = new NotificationChannel(CHANNEL, "本機採購單辨識", NotificationManager.IMPORTANCE_LOW);
-        c.setDescription("文件校正、分區 PP-OCRv6、ML Kit、局部 MiniCPM 與規則驗證進度");
+        NotificationChannel c = new NotificationChannel(CHANNEL, "本機採購單辨識與排隊", NotificationManager.IMPORTANCE_LOW);
+        c.setDescription("排隊處理文件校正、分區 PP-OCRv6、ML Kit、局部 MiniCPM 與規則驗證進度");
         c.setSound(null, null);
         nm.createNotificationChannel(c);
     }
 
     private Notification notification(String text, int progress, boolean finished) {
-        Intent open = new Intent(this, AiMainActivity.class);
+        Intent open = new Intent(this, EnhancedAiMainActivity.class);
         open.putExtra("screen", finished ? "purchases" : "analysis");
         open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         PendingIntent pi = PendingIntent.getActivity(this, 71, open,
@@ -306,7 +293,7 @@ public class AiAnalysisService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         b.setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(finished ? "全益採購追蹤｜AI 結果已建立" : "全益採購追蹤｜分區 OCR + 局部 MiniCPM")
+                .setContentTitle(finished ? "全益採購追蹤｜AI 排隊完成" : "全益採購追蹤｜AI 分析排隊中")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOnlyAlertOnce(true)
