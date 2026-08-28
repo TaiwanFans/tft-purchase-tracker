@@ -41,6 +41,7 @@ jobs:
           python3 patch_v153.py
           python3 patch_v154.py
           python3 patch_v155.py
+          python3 patch_v155_fix.py
           python3 - <<'PY'
           from pathlib import Path
           import xml.etree.ElementTree as ET
