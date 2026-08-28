@@ -18,7 +18,6 @@ import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -38,7 +37,8 @@ import java.util.UUID;
 
 /**
  * Enhanced layer over the existing procurement UI.
- * V2.0.17 adds a persistent/reorderable AI queue and a permanent recognition-database settings entry.
+ * V2.0.17 adds a persistent/reorderable AI queue, direct result links and a permanent
+ * recognition-database settings entry.
  */
 public class EnhancedAiMainActivity extends AiMainActivity {
     private static final int REQ_DOCUMENT_SCAN = 901;
@@ -140,8 +140,7 @@ public class EnhancedAiMainActivity extends AiMainActivity {
         block.setPadding(dp(13), dp(11), dp(13), dp(11));
         block.setBackground(box(Color.WHITE, Color.rgb(8,145,178), 2));
 
-        TextView title = label("辨識資料庫設定", 17, Color.rgb(15,42,92), true);
-        block.addView(title);
+        block.addView(label("辨識資料庫設定", 17, Color.rgb(15,42,92), true));
         int vendorCount = 0;
         try { vendorCount = new RecognitionKnowledgeDb(this).listVendors().size(); } catch (Throwable ignored) {}
         block.addView(label("可隨時新增、修改、刪除廠商、地址、辨識關鍵字與常購品項。目前廠商資料：" + vendorCount + " 筆。", 13, Color.rgb(71,85,105), false));
@@ -193,7 +192,7 @@ public class EnhancedAiMainActivity extends AiMainActivity {
             int waiting = s.running() ? Math.max(0, s.queue.size() - s.nextIndex - 1) : 0;
             String state = s.running()
                     ? "總進度 " + s.progress + "%｜目前第 " + Math.max(1, s.current) + "/" + Math.max(1,s.queue.size()) + " 張｜等待 " + waiting + " 張"
-                    : (AiJobStore.STATE_DONE.equals(s.state) ? "本次排隊已完成｜共 " + s.queue.size() + " 張" : "目前沒有進行中的排隊工作");
+                    : (AiJobStore.STATE_DONE.equals(s.state) ? "本次排隊已完成｜共 " + s.queue.size() + " 張｜點每張的『查看結果』直接核對" : "目前沒有進行中的排隊工作");
             ((TextView) summaryView).setText(state);
         }
 
@@ -239,6 +238,16 @@ public class EnhancedAiMainActivity extends AiMainActivity {
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.VERTICAL);
+
+        long resultId = resultIdFor(s,index);
+        if (resultId > 0) {
+            Button result = smallButton("查看結果");
+            result.setTextColor(Color.rgb(22,101,52));
+            result.setOnClickListener(v -> openResult(resultId));
+            controls.addView(result);
+            outer.setOnClickListener(v -> openResult(resultId));
+        }
+
         boolean waiting = s.running() && index > s.nextIndex;
         Button up = smallButton("↑ 上移");
         up.setEnabled(waiting && index > s.nextIndex + 1);
@@ -252,6 +261,18 @@ public class EnhancedAiMainActivity extends AiMainActivity {
         return outer;
     }
 
+    private long resultIdFor(AiJobStore.Snapshot s,int index){
+        if(s==null||s.lastIds==null||index<0||index>=s.lastIds.size())return -1;
+        Long id=s.lastIds.get(index);return id==null?-1:id;
+    }
+
+    private void openResult(long id){
+        if(id<=0)return;
+        Intent i=new Intent(this,PurchaseEditActivity.class);
+        i.putExtra("purchase_id",id);
+        startActivity(i);
+    }
+
     private void updateQueueStatusTexts(LinearLayout list, AiJobStore.Snapshot s) {
         for (int i=0;i<s.queue.size();i++) {
             AiJobStore.QueueItem q=s.queue.get(i);
@@ -261,7 +282,8 @@ public class EnhancedAiMainActivity extends AiMainActivity {
     }
 
     private String queueStatus(AiJobStore.Snapshot s, int index) {
-        if (AiJobStore.STATE_DONE.equals(s.state) || index < s.nextIndex) return "✓ 已完成";
+        long resultId=resultIdFor(s,index);
+        if (resultId>0 || AiJobStore.STATE_DONE.equals(s.state) || index < s.nextIndex) return "✓ 已完成｜可直接查看 AI 結果";
         if (s.running() && index == s.nextIndex) return "● 分析中 " + s.itemProgress + "%｜" + shortStage(s.stage);
         if (s.running() && index > s.nextIndex) return "等待中｜前面還有 " + (index - s.nextIndex) + " 張";
         if (AiJobStore.STATE_ERROR.equals(s.state) && index >= s.nextIndex) return "！尚未完成，可重新進入後再分析";
@@ -269,7 +291,7 @@ public class EnhancedAiMainActivity extends AiMainActivity {
     }
 
     private int statusColor(AiJobStore.Snapshot s,int index){
-        if(AiJobStore.STATE_DONE.equals(s.state)||index<s.nextIndex)return Color.rgb(22,163,74);
+        if(resultIdFor(s,index)>0||AiJobStore.STATE_DONE.equals(s.state)||index<s.nextIndex)return Color.rgb(22,163,74);
         if(s.running()&&index==s.nextIndex)return Color.rgb(8,145,178);
         if(AiJobStore.STATE_ERROR.equals(s.state))return Color.rgb(220,38,38);
         return Color.rgb(100,116,139);
@@ -278,7 +300,7 @@ public class EnhancedAiMainActivity extends AiMainActivity {
     private String shortStage(String s){if(s==null)return"";int p=s.indexOf('｜');if(p>=0&&p+1<s.length())return s.substring(p+1);return s;}
 
     private String structureFingerprint(AiJobStore.Snapshot s){
-        StringBuilder b=new StringBuilder(s.state).append('|').append(s.nextIndex).append('|');
+        StringBuilder b=new StringBuilder(s.state).append('|').append(s.nextIndex).append('|').append(s.lastIds==null?0:s.lastIds.size()).append('|');
         for(AiJobStore.QueueItem q:s.queue)b.append(q.id).append(';');
         return b.toString();
     }
@@ -315,7 +337,7 @@ public class EnhancedAiMainActivity extends AiMainActivity {
     private boolean containsDirectOrNestedText(View v,String wanted){if(v instanceof TextView&&String.valueOf(((TextView)v).getText()).contains(wanted))return true;if(v instanceof ViewGroup){ViewGroup g=(ViewGroup)v;for(int i=0;i<g.getChildCount();i++)if(containsDirectOrNestedText(g.getChildAt(i),wanted))return true;}return false;}
 
     private void rewriteOldVersionLabel(View view){
-        if(view instanceof TextView){TextView t=(TextView)view;String s=String.valueOf(t.getText());if(s.startsWith("版本 2.0.12"))t.setText("版本 2.0.17｜新增 AI 排隊、可調整等待順序、辨識資料庫永久設定入口");}
+        if(view instanceof TextView){TextView t=(TextView)view;String s=String.valueOf(t.getText());if(s.startsWith("版本 2.0.12"))t.setText("版本 2.0.17｜PP-OCRv6 Small ONNX｜AI 排隊｜完成結果直達｜辨識資料庫設定");}
         if(view instanceof ViewGroup){ViewGroup g=(ViewGroup)view;for(int i=0;i<g.getChildCount();i++)rewriteOldVersionLabel(g.getChildAt(i));}
     }
 
