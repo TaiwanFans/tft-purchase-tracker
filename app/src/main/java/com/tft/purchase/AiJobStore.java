@@ -59,6 +59,7 @@ public final class AiJobStore {
         p(c).edit()
                 .putInt("next_index", Math.max(0, nextIndex))
                 .putInt("success", Math.max(0, success))
+                .putInt("failed", Math.max(0, warnings))
                 .putInt("warning_count", Math.max(0, warnings))
                 .apply();
     }
@@ -80,7 +81,7 @@ public final class AiJobStore {
                 .putInt("progress", 100)
                 .putString("stage", stage)
                 .putInt("success", Math.max(0, created))
-                .putInt("failed", 0)
+                .putInt("failed", Math.max(0, warnings))
                 .putInt("warning_count", Math.max(0, warnings))
                 .putString("error", created > 0 ? "" : "AI 沒有建立任何採購單")
                 .apply();
