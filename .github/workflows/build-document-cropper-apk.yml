@@ -6,6 +6,9 @@ on:
       - document-cropper-apk-build
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -30,7 +33,7 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Apply v1.5.8 release patches
+      - name: Flatten v1.5.8 and migrate to v2 core
         working-directory: android-document-cropper
         run: |
           sed -i "s/^guide box')/'guide box')/" patch_v140.py
@@ -46,40 +49,69 @@ jobs:
           python3 patch_v157.py
           python3 patch_v158.py
           python3 patch_v158_fix.py
+          python3 migrate_v2_core.py
+
+      - name: V2 source architecture review
+        working-directory: android-document-cropper
+        run: |
           python3 - <<'PY'
           from pathlib import Path
-          import xml.etree.ElementTree as ET
           build = Path('app/build.gradle').read_text(encoding='utf-8')
           main = Path('app/src/main/java/com/quanyi/docscanner/MainActivity.java').read_text(encoding='utf-8')
-          crop = Path('app/src/main/java/com/quanyi/docscanner/DocumentCropView.java').read_text(encoding='utf-8')
           image = Path('app/src/main/java/com/quanyi/docscanner/ImageUtils.java').read_text(encoding='utf-8')
-          zoom = Path('app/src/main/java/com/quanyi/docscanner/ZoomableImageView.java').read_text(encoding='utf-8')
-          assert "versionName '1.5.8'" in build and 'versionCode 158' in build
-          assert 'prepareAiBatchForPreview' in main
-          assert 'buildPreviewDocumentBitmap' in main and 'previewQualityMaxDimension' in main
-          assert 'buildFinalDocumentBitmap' in main
-          assert '按住對比｜查看原圖' in main and 'compareOriginalBitmap' in main
-          assert '增強銳化' in main
-          assert 'setImageBitmapKeepTransform' in zoom
-          assert 'normalizeIllumination' in image
-          assert 'MORPH_BLACKHAT' in image
-          assert 'unsharpLuminance' in image
-          assert 'enhanceStrongSharpOpenCv' in image
-          assert 'adaptiveThreshold(temp, processed' in image
-          assert 'handleSize = dp(10)' in crop and 'float best=dp(110)' in crop
-          assert 'buildSnapEdgeMap' in crop and 'snapEdgeToDocument' in crop
-          assert 'loadBitmapExact' in main and 'outputMaxDimension()' in main
-          assert 'ImageUtils.perspectiveCrop(original, points, outputMaxDimension())' in main
+          classes = Path('app/src/main/java/com/quanyi/docscanner')
+          required = [
+              'ScanSession.java', 'DeviceProfile.java', 'DocumentDetector.java',
+              'CropController.java', 'FilterPreset.java', 'DocumentFilterEngine.java',
+              'PreviewRenderer.java', 'ExportManager.java', 'DocumentCropView.java',
+              'ZoomableImageView.java'
+          ]
+          for name in required:
+              assert (classes / name).exists(), name
+          assert "versionName '2.0.0'" in build and 'versionCode 200' in build
+          assert 'private final ScanSession session = new ScanSession();' in main
+          assert 'session.saveToBundle(outState)' in main
+          assert 'previewRenderer.render(' in main
+          assert 'exportManager.renderFinal(' in main
+          assert 'filterEngine.apply(base, preset)' in main
+          assert 'ImageUtils.enhance(base' not in main
+          assert 'presetBright()' not in main and 'presetSharp()' not in main and 'presetMonochrome()' not in main
+          assert 'MORPH_BLACKHAT' in image and 'normalizeIllumination' in image
           assert 'nearFramePenalty' in image
-          assert 'perspectiveCrop(Bitmap src, PointF[] p, int maxOutputDim)' in image
-          ET.parse('app/src/main/res/drawable/ic_pixel_document.xml')
-          print('v1.5.8 source self-review OK')
+          crop = (classes / 'DocumentCropView.java').read_text(encoding='utf-8')
+          assert 'buildSnapEdgeMap' in crop and 'snapEdgeToDocument' in crop
+          assert 'handleSize = dp(10)' in crop and 'float best=dp(110)' in crop
+          print('V2 architecture/source review OK')
           PY
 
-      - name: Upload flattened source snapshot
+      - name: Run unit tests
+        working-directory: android-document-cropper
+        run: gradle :app:testDebugUnitTest --stacktrace
+
+      - name: Compile debug APK
+        working-directory: android-document-cropper
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Validate APK and manifest
+        working-directory: android-document-cropper
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          unzip -t app/build/outputs/apk/debug/app-debug.apk >/dev/null
+          apkanalyzer manifest application-id app/build/outputs/apk/debug/app-debug.apk | grep -q '^com.quanyi.docscanner$'
+          apkanalyzer manifest version-name app/build/outputs/apk/debug/app-debug.apk | grep -q '^2.0.0$'
+          echo "V2 APK archive + manifest validation OK"
+
+      - name: Upload v2 APK
         uses: actions/upload-artifact@v4
         with:
-          name: document-cropper-source-v158-flattened
+          name: document-cropper-apk-v2-core
+          path: android-document-cropper/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload flattened v2 source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: document-cropper-source-v2-core
           path: |
             android-document-cropper/app
             android-document-cropper/build.gradle
@@ -87,21 +119,11 @@ jobs:
             android-document-cropper/settings.gradle
           if-no-files-found: error
 
-      - name: Compile and build debug APK
-        working-directory: android-document-cropper
-        run: gradle :app:assembleDebug --stacktrace
-
-      - name: Validate APK archive
-        working-directory: android-document-cropper
+      - name: Commit flattened v2 source and retire patch chain
         run: |
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          unzip -t app/build/outputs/apk/debug/app-debug.apk >/dev/null
-          ls -lh app/build/outputs/apk/debug/app-debug.apk
-          echo "APK archive validation OK"
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: document-cropper-apk-v158
-          path: android-document-cropper/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add android-document-cropper/app android-document-cropper/build.gradle android-document-cropper/gradle.properties android-document-cropper/settings.gradle
+          git rm -f android-document-cropper/patch_v*.py android-document-cropper/migrate_v2_core.py
+          git commit -m "Flatten v2 core source and retire patch chain [skip ci]"
+          git push origin HEAD:document-cropper-apk-build
