@@ -82,9 +82,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: TFT-Purchase-Tracker-v2.0.16-APK
+          name: TFT-Purchase-Tracker-v2.0.17-APK
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/app-debug.apk.sha256
-
-# fresh-run: 2026-08-28 after Actions settings were fixed
