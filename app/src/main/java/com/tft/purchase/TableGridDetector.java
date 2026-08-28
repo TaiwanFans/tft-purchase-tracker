@@ -15,43 +15,51 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Lightweight wired-table detector for purchase/quotation documents.
- * It uses morphology to isolate long horizontal/vertical rules, then exposes
- * normalized grid boundaries so OCR words can be permanently bound to a row/cell.
+ * Wired-table detector tuned for the company's fixed purchase-order form.
+ * The production form has 8 semantic columns / 9 vertical boundaries:
+ * 項次 | 品名規格明細 | 數量 | 單位 | 單價 | 小計 | 交貨日期 | 備註.
  */
 public final class TableGridDetector {
     private TableGridDetector() {}
+
+    // Width proportions measured from the user's 20 real forms, normalized to the table span.
+    private static final float[] FIXED_PURCHASE_WIDTHS = {
+            0.034f, 0.430f, 0.075f, 0.044f, 0.065f, 0.103f, 0.123f, 0.126f
+    };
 
     public static final class Grid {
         public final List<Float> xLines;
         public final List<Float> yLines;
         public final boolean reliable;
+        public final boolean fixedPurchaseTemplate;
+        public final float templateError;
         public final String reason;
 
-        Grid(List<Float> x, List<Float> y, boolean reliable, String reason) {
+        Grid(List<Float> x, List<Float> y, boolean reliable,
+             boolean fixedPurchaseTemplate, float templateError, String reason) {
             this.xLines = Collections.unmodifiableList(new ArrayList<>(x));
             this.yLines = Collections.unmodifiableList(new ArrayList<>(y));
             this.reliable = reliable;
+            this.fixedPurchaseTemplate = fixedPurchaseTemplate;
+            this.templateError = templateError;
             this.reason = reason == null ? "" : reason;
         }
 
         public int columnCount() { return Math.max(0, xLines.size() - 1); }
         public int rowCount() { return Math.max(0, yLines.size() - 1); }
-
         public int column(float x) { return interval(xLines, x); }
         public int row(float y) { return interval(yLines, y); }
 
         public String summary() {
             return String.format(Locale.US,
-                    "reliable=%s columns=%d rows=%d xSpan=%.3f ySpan=%.3f reason=%s",
-                    reliable, columnCount(), rowCount(), span(xLines), span(yLines), reason);
+                    "reliable=%s fixed_purchase_template=%s template_error=%.4f columns=%d rows=%d xSpan=%.3f ySpan=%.3f reason=%s",
+                    reliable, fixedPurchaseTemplate, templateError,
+                    columnCount(), rowCount(), span(xLines), span(yLines), reason);
         }
     }
 
     public static Grid detect(String correctedImagePath) {
-        if (correctedImagePath == null || correctedImagePath.trim().isEmpty()) {
-            return empty("image_path_empty");
-        }
+        if (correctedImagePath == null || correctedImagePath.trim().isEmpty()) return empty("image_path_empty");
         if (!ensureOpenCv()) return empty("opencv_unavailable");
 
         Bitmap bm = null;
@@ -79,8 +87,6 @@ public final class TableGridDetector {
             vKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(1, verticalLen));
             Imgproc.morphologyEx(bw, horizontal, Imgproc.MORPH_OPEN, hKernel);
             Imgproc.morphologyEx(bw, vertical, Imgproc.MORPH_OPEN, vKernel);
-
-            // Connect slightly broken rules after JPEG/scan noise.
             Imgproc.dilate(horizontal, horizontal,
                     Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(7, 1)));
             Imgproc.dilate(vertical, vertical,
@@ -93,16 +99,20 @@ public final class TableGridDetector {
             for (int x = 0; x < cols; x++) xHit[x] = Core.countNonZero(vertical.col(x)) >= minVerticalPixels;
             for (int y = 0; y < rows; y++) yHit[y] = Core.countNonZero(horizontal.row(y)) >= minHorizontalPixels;
 
-            List<Float> xs = cluster(xHit, cols, 0.015f, 0.985f);
-            List<Float> ys = cluster(yHit, rows, 0.08f, 0.94f);
-            xs = mergeClose(xs, 0.006f);
-            ys = mergeClose(ys, 0.0045f);
+            List<Float> rawXs = mergeClose(cluster(xHit, cols, 0.015f, 0.995f), 0.006f);
+            List<Float> ys = mergeClose(cluster(yHit, rows, 0.08f, 0.94f), 0.0045f);
 
+            CanonicalColumns cc = canonicalizePurchaseColumns(rawXs);
+            List<Float> xs = cc.matched ? cc.lines : rawXs;
             boolean reliable = xs.size() >= 5 && ys.size() >= 5
                     && span(xs) >= 0.55f && span(ys) >= 0.20f;
-            String reason = reliable ? "wired_grid_detected"
-                    : "insufficient_lines(x=" + xs.size() + ",y=" + ys.size() + ")";
-            return new Grid(xs, ys, reliable, reason);
+            // For this company's known form, 9 vertical boundaries are much stronger evidence
+            // than a generic collection of lines from page borders / stamps.
+            if (cc.matched) reliable = ys.size() >= 5 && span(ys) >= 0.20f;
+            String reason = cc.matched ? "fixed_purchase_8col_grid"
+                    : (reliable ? "wired_grid_detected"
+                    : "insufficient_lines(x=" + xs.size() + ",y=" + ys.size() + ")");
+            return new Grid(xs, ys, reliable, cc.matched, cc.error, reason);
         } catch (Throwable t) {
             String m = t.getMessage();
             return empty("exception:" + (m == null ? t.getClass().getSimpleName() : m));
@@ -115,6 +125,43 @@ public final class TableGridDetector {
             try { hKernel.release(); } catch (Throwable ignored) {}
             try { vKernel.release(); } catch (Throwable ignored) {}
             if (bm != null && !bm.isRecycled()) bm.recycle();
+        }
+    }
+
+    /** Pure-Java helper kept package-visible for regression tests. */
+    static CanonicalColumns canonicalizePurchaseColumns(List<Float> input) {
+        if (input == null || input.size() < 9) return new CanonicalColumns(false, Collections.emptyList(), 9f);
+        List<Float> sorted = new ArrayList<>(input);
+        Collections.sort(sorted);
+        float best = Float.MAX_VALUE;
+        List<Float> bestLines = null;
+        // Real scans sometimes add one page-edge line. Test every consecutive 9-boundary window.
+        for (int start = 0; start + 8 < sorted.size(); start++) {
+            List<Float> w = new ArrayList<>(sorted.subList(start, start + 9));
+            float s = w.get(8) - w.get(0);
+            if (s < 0.72f || s > 0.99f) continue;
+            float err = 0f;
+            for (int i = 0; i < 8; i++) {
+                float observed = (w.get(i + 1) - w.get(i)) / s;
+                float d = observed - FIXED_PURCHASE_WIDTHS[i];
+                // Large description and delivery-date cells carry slightly more weight.
+                float weight = (i == 1 || i == 6) ? 1.35f : 1f;
+                err += Math.abs(d) * weight;
+            }
+            if (err < best) { best = err; bestLines = w; }
+        }
+        // Empirically, the 20 supplied forms cluster far below this error after perspective correction.
+        boolean matched = bestLines != null && best <= 0.135f;
+        return new CanonicalColumns(matched,
+                matched ? new ArrayList<>(bestLines) : Collections.emptyList(), best);
+    }
+
+    static final class CanonicalColumns {
+        final boolean matched;
+        final List<Float> lines;
+        final float error;
+        CanonicalColumns(boolean matched, List<Float> lines, float error) {
+            this.matched = matched; this.lines = lines; this.error = error;
         }
     }
 
@@ -179,6 +226,6 @@ public final class TableGridDetector {
     }
 
     private static Grid empty(String reason) {
-        return new Grid(Collections.emptyList(), Collections.emptyList(), false, reason);
+        return new Grid(Collections.emptyList(), Collections.emptyList(), false, false, 9f, reason);
     }
 }
