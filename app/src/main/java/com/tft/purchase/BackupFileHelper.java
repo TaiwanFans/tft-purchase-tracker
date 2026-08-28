@@ -37,9 +37,10 @@ public final class BackupFileHelper {
         Uri uri = Uri.parse(uriString);
         PurchaseDbHelper db = new PurchaseDbHelper(context);
         JSONObject root = new JSONObject();
-        root.put("backup_version", 3);
+        root.put("backup_version", 4);
         root.put("created_at", System.currentTimeMillis());
         root.put("reminder_days", prefs.getInt("reminder_days", 5));
+        root.put("recognition_knowledge", new RecognitionKnowledgeDb(context).exportJson());
         JSONArray orders = new JSONArray();
         Map<Long, String> imageEntries = new HashMap<>();
         for (PurchaseDbHelper.Purchase p : db.list("")) {
@@ -66,6 +67,7 @@ public final class BackupFileHelper {
                 JSONObject j = new JSONObject();
                 j.put("line_no", i.lineNo);
                 j.put("description", i.description);
+                j.put("specification", i.specification);
                 j.put("quantity", i.quantity);
                 j.put("unit", i.unit);
                 j.put("unit_price", i.unitPrice);
@@ -152,13 +154,17 @@ public final class BackupFileHelper {
                 JSONObject j = items.getJSONObject(y);
                 PurchaseDbHelper.PurchaseItem i = new PurchaseDbHelper.PurchaseItem();
                 i.purchaseId = newId; i.lineNo = j.optString("line_no", ""); i.description = j.optString("description", "");
+                i.specification = j.optString("specification", "");
                 i.quantity = j.optString("quantity", ""); i.unit = j.optString("unit", ""); i.unitPrice = j.optString("unit_price", "");
                 i.subtotal = j.optString("subtotal", ""); i.deliveryDate = j.optString("delivery_date", ""); i.note = j.optString("note", "");
                 i.completed = j.optBoolean("completed", false); db.insertItem(i);
             }
             count++;
         }
-        context.getSharedPreferences("tft_settings", Context.MODE_PRIVATE).edit().putInt("reminder_days", root.optInt("reminder_days", 5)).apply();
+        JSONObject knowledge = root.optJSONObject("recognition_knowledge");
+        if (knowledge != null) new RecognitionKnowledgeDb(context).importJson(knowledge);
+        context.getSharedPreferences("tft_settings", Context.MODE_PRIVATE).edit()
+                .putInt("reminder_days", root.optInt("reminder_days", 5)).apply();
         return count;
     }
 }
