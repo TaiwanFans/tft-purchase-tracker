@@ -17,17 +17,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * V2.0.15 high-detail OCR strategy.
- *
- * Instead of asking OCR to read one dense A4 page at once, the corrected page is divided into
- * numbered overlapping zones. Each zone is enlarged before PP-OCRv6 Medium + ML Kit run. Local
- * coordinates are mapped back into full-page coordinates, overlapping duplicates are merged, and
- * disagreements are explicitly marked for MiniCPM / validation.
+ * High-detail OCR strategy: corrected page -> overlapping zones -> enlarge -> PP-OCRv6 Medium
+ * + ML Kit -> global coordinate mapping -> spatial consensus/conflict evidence.
  */
 public final class ZoomTiledOcrBridge {
     private ZoomTiledOcrBridge() {}
 
     public interface Callback {
+        default void onProgress(int percent, String stage) {}
         void onSuccess(String evidence);
         void onFailure(String error);
     }
@@ -44,13 +41,12 @@ public final class ZoomTiledOcrBridge {
     }
 
     private static final Tile[] PLAN = new Tile[]{
-            // Header is split left/right because vendor/address and PO number/date often use small print.
-            new Tile("H1",0.00f,0.00f,0.62f,0.34f,2.55f),
-            new Tile("H2",0.38f,0.00f,0.62f,0.34f,2.55f),
-            // Item table is read in overlapping horizontal bands so tiny quantities/specs are enlarged.
-            new Tile("R1",0.00f,0.22f,1.00f,0.25f,1.75f),
-            new Tile("R2",0.00f,0.40f,1.00f,0.25f,1.75f),
-            new Tile("R3",0.00f,0.58f,1.00f,0.22f,1.85f)
+            new Tile("H1",0.00f,0.00f,0.62f,0.34f,2.70f),
+            new Tile("H2",0.38f,0.00f,0.62f,0.34f,2.70f),
+            // 18-28% vertical overlap protects text sitting directly on a crop boundary.
+            new Tile("R1",0.00f,0.22f,1.00f,0.27f,2.20f),
+            new Tile("R2",0.00f,0.40f,1.00f,0.27f,2.20f),
+            new Tile("R3",0.00f,0.58f,1.00f,0.24f,2.30f)
     };
 
     private static final Pattern LINE = Pattern.compile(
@@ -68,21 +64,30 @@ public final class ZoomTiledOcrBridge {
 
                 List<Entry> entries = new ArrayList<>();
                 StringBuilder errors = new StringBuilder();
-                for (Tile tile : PLAN) {
+                int[] starts = {28, 40, 55, 66, 76};
+                int[] ends =   {38, 52, 64, 74, 81};
+                for (int ti=0; ti<PLAN.length; ti++) {
+                    Tile tile = PLAN[ti];
+                    callback.onProgress(starts[ti], "正在切割並放大 " + tile.id + "（" + tileLabel(tile.id) + "）");
                     File crop = cropZoom(app, full, tile);
                     try {
+                        callback.onProgress(Math.min(80, starts[ti]+2), "PP-OCRv6 Medium + ML Kit 正在辨識 " + tile.id);
                         OcrPair pair = recognizePair(app, crop.getAbsolutePath());
                         if (!pair.pp.isEmpty()) parseAndMap(pair.pp, "PP", tile, entries);
                         else if (!pair.ppError.isEmpty()) errors.append(tile.id).append(" PP:").append(pair.ppError).append('\n');
                         if (!pair.ml.isEmpty()) parseAndMap(pair.ml, "ML", tile, entries);
                         else if (!pair.mlError.isEmpty()) errors.append(tile.id).append(" ML:").append(pair.mlError).append('\n');
+                        if (pair.timedOut) errors.append(tile.id).append(" OCR_TIMEOUT: one or more engines exceeded 90s\n");
+                        callback.onProgress(ends[ti], tile.id + " 雙 OCR 完成，保留文字座標");
                     } finally {
                         try { crop.delete(); } catch (Throwable ignored) {}
                     }
                 }
 
                 if (entries.isEmpty()) throw new Exception("放大分區後兩套 OCR 都沒有取得文字" + (errors.length()>0 ? "："+errors : ""));
+                callback.onProgress(83, "正在把 H1/H2/R1/R2/R3 座標重新組回採購單");
                 List<Entry> merged = dedupe(entries);
+                callback.onProgress(86, "正在比對 PP-OCR 與 ML Kit 的數字／文字衝突");
                 callback.onSuccess(buildEvidence(merged, entries, errors.toString()));
             } catch (Throwable t) {
                 callback.onFailure(safe(t));
@@ -99,7 +104,7 @@ public final class ZoomTiledOcrBridge {
         int bottom = clamp(Math.round(full.getHeight()*(t.y+t.h)),top+1,full.getHeight());
         Bitmap crop = Bitmap.createBitmap(full,left,top,right-left,bottom-top);
         int longSide = Math.max(crop.getWidth(),crop.getHeight());
-        float scale = Math.min(t.zoom, 3400f / Math.max(1,longSide));
+        float scale = Math.min(t.zoom, 4000f / Math.max(1,longSide));
         if (scale < 1f) scale = 1f;
         Bitmap zoomed = crop;
         if (scale > 1.04f) {
@@ -117,6 +122,7 @@ public final class ZoomTiledOcrBridge {
 
     private static final class OcrPair {
         String pp="",ml="",ppError="",mlError="";
+        boolean timedOut=false;
     }
 
     private static OcrPair recognizePair(Context context,String path) throws InterruptedException {
@@ -130,7 +136,11 @@ public final class ZoomTiledOcrBridge {
             @Override public void onSuccess(String s){out.ml=s==null?"":s;latch.countDown();}
             @Override public void onFailure(String e){out.mlError=e==null?"":e;latch.countDown();}
         });
-        latch.await(90, TimeUnit.SECONDS);
+        out.timedOut = !latch.await(90, TimeUnit.SECONDS);
+        if (out.timedOut) {
+            if (out.pp.isEmpty() && out.ppError.isEmpty()) out.ppError="timeout";
+            if (out.ml.isEmpty() && out.mlError.isEmpty()) out.mlError="timeout";
+        }
         return out;
     }
 
@@ -144,7 +154,7 @@ public final class ZoomTiledOcrBridge {
             e.w=clampf(lw*tile.w); e.h=clampf(lh*tile.h);
             e.conf=m.group(5)==null?(engine.equals("ML")?0.55f:0.40f):f(m.group(5));
             e.text=m.group(6)==null?"":m.group(6).trim();
-            if(!e.text.isEmpty() && e.cy()<0.82f) out.add(e);
+            if(!e.text.isEmpty() && e.cy()<0.84f) out.add(e);
         }
     }
 
@@ -155,18 +165,19 @@ public final class ZoomTiledOcrBridge {
         for(Entry e:sorted) {
             Entry same=null;
             String n=norm(e.text);
-            for(int i=Math.max(0,out.size()-45);i<out.size();i++) {
+            for(int i=Math.max(0,out.size()-55);i<out.size();i++) {
                 Entry x=out.get(i);
-                if(Math.abs(x.cy()-e.cy())>0.045f) continue;
-                if(Math.abs(x.cx()-e.cx())>0.065f) continue;
+                if(Math.abs(x.cy()-e.cy())>0.038f) continue;
+                if(Math.abs(x.cx()-e.cx())>0.055f) continue;
                 if(n.equals(norm(x.text)) && !n.isEmpty()) {same=x;break;}
             }
             if(same==null) out.add(e);
             else {
                 if(!same.engine.contains(e.engine)) same.engine += "+"+e.engine;
                 if(!same.tile.contains(e.tile)) same.tile += "+"+e.tile;
+                float oldConf=same.conf;
                 same.conf=Math.max(same.conf,e.conf); same.zoom=Math.max(same.zoom,e.zoom);
-                if(e.w*e.h < same.w*same.h && e.conf>=same.conf-0.08f){same.x=e.x;same.y=e.y;same.w=e.w;same.h=e.h;}
+                if(e.w*e.h < same.w*same.h && e.conf>=oldConf-0.08f){same.x=e.x;same.y=e.y;same.w=e.w;same.h=e.h;}
             }
         }
         return out;
@@ -174,10 +185,11 @@ public final class ZoomTiledOcrBridge {
 
     private static String buildEvidence(List<Entry> merged,List<Entry> raw,String errors) {
         StringBuilder sb=new StringBuilder();
-        sb.append("[ZOOM_TILED_OCR_V215]\n");
-        sb.append("strategy=corrected_page -> numbered_overlap_tiles -> enlarge -> PP-OCRv6-Medium + ML-Kit -> map_to_global_coordinates -> merge\n");
+        sb.append("[ZOOM_TILED_OCR_V216]\n");
+        sb.append("strategy=corrected_highres_page -> numbered_overlap_tiles -> 2.2x-2.7x enlarge -> PP-OCRv6-Medium + ML-Kit -> map_to_global_coordinates -> merge\n");
         sb.append("tiles=H1(header-left),H2(header-right),R1/R2/R3(item-table overlapping bands)\n");
-        sb.append("rule=同一文字在重疊區重複出現會合併；PP/ML 在同一位置衝突時必須標記並由圖片確認，禁止猜。\n");
+        sb.append("rule=同位置雙 OCR 一致才提高可信度；衝突或低信心只提供證據，不准直接猜值。\n");
+        int low=0;
         for(Entry e:merged) {
             sb.append("[engine=").append(e.engine).append(" tile=").append(e.tile)
                     .append(" region=").append(region(e.cx(),e.cy()))
@@ -185,33 +197,47 @@ public final class ZoomTiledOcrBridge {
                     .append(" gw=").append(ff(e.w)).append(" gh=").append(ff(e.h))
                     .append(" conf=").append(ff(e.conf)).append(" zoom=").append(String.format(Locale.US,"%.1f",e.zoom))
                     .append("] ").append(e.text.replace('\n',' ')).append('\n');
+            float threshold = e.engine.contains("PP") ? 0.52f : 0.48f;
+            if(e.conf<threshold && low++<24 && (containsDigit(e.text)||region(e.cx(),e.cy()).startsWith("HEADER"))) {
+                sb.append("LOW_CONFIDENCE @").append(ff(e.cx())).append(',').append(ff(e.cy()))
+                        .append(" engine=").append(e.engine).append(" value=").append(e.text).append('\n');
+            }
         }
 
         int conflicts=0,consensus=0;
         sb.append("[OCR_SPATIAL_CROSSCHECK]\n");
         for(Entry p:raw) {
             if(!p.engine.equals("PP")) continue;
-            Entry best=null; double bestD=999;
+            Entry best=null; double bestScore=999;
             for(Entry m:raw) {
                 if(!m.engine.equals("ML")) continue;
-                double d=Math.hypot(p.cx()-m.cx(),p.cy()-m.cy());
-                if(d<bestD){bestD=d;best=m;}
+                double dx=Math.abs(p.cx()-m.cx());
+                double dy=Math.abs(p.cy()-m.cy());
+                if(dy>0.022 || dx>0.060) continue;
+                double score=dx + dy*2.8;
+                if(score<bestScore){bestScore=score;best=m;}
             }
-            if(best==null||bestD>0.050) continue;
+            if(best==null) continue;
             String a=norm(p.text),b=norm(best.text);
             if(a.isEmpty()||b.isEmpty()) continue;
             if(a.equals(b)) {
-                if(consensus++<50) sb.append("CONSENSUS_HIGH @").append(ff(p.cx())).append(',').append(ff(p.cy())).append(" = ").append(p.text).append('\n');
-            } else if((containsDigit(p.text)||containsDigit(best.text)) && conflicts++<40) {
+                if(consensus++<60) sb.append("CONSENSUS_HIGH @").append(ff(p.cx())).append(',').append(ff(p.cy())).append(" = ").append(p.text).append('\n');
+            } else if((containsDigit(p.text)||containsDigit(best.text)) && conflicts++<45) {
                 sb.append("CONFLICT @").append(ff(p.cx())).append(',').append(ff(p.cy()))
-                        .append(" PP=").append(p.text).append(" | ML=").append(best.text).append(" -> 看圖片，不確定則人工確認\n");
+                        .append(" PP=").append(p.text).append(" | ML=").append(best.text)
+                        .append(" -> LOCAL_IMAGE_CHECK_REQUIRED; unclear => NEEDS_CONFIRMATION\n");
             }
         }
         if(!errors.isEmpty()) sb.append("[OCR_PARTIAL_ERRORS]\n").append(errors);
         return sb.toString();
     }
 
-    private static String region(float x,float y){if(y<0.34f&&x<0.58f)return"HEADER_LEFT";if(y<0.34f)return"HEADER_RIGHT";if(y<0.82f)return"ITEM_TABLE";return"FOOTER";}
+    private static String tileLabel(String id){
+        if("H1".equals(id))return"供應廠商／地址";
+        if("H2".equals(id))return"採購單號／採購日期";
+        return"品項表格";
+    }
+    private static String region(float x,float y){if(y<0.34f&&x<0.58f)return"HEADER_LEFT";if(y<0.34f)return"HEADER_RIGHT";if(y<0.84f)return"ITEM_TABLE";return"FOOTER";}
     private static boolean containsDigit(String s){return s!=null&&s.matches(".*\\d.*");}
     private static String norm(String s){return s==null?"":s.toUpperCase(Locale.TAIWAN).replaceAll("[\\s　,，.。:：()（）/\\-＿_]","");}
     private static float f(String s){try{return Float.parseFloat(s);}catch(Exception e){return 0f;}}
