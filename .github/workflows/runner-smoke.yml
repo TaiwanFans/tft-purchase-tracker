@@ -6,10 +6,18 @@ on:
   workflow_dispatch:
 
 jobs:
-  smoke:
+  smoke-linux:
     runs-on: ubuntu-22.04
     steps:
-      - name: Runner is alive
+      - name: Linux runner is alive
         run: |
-          echo "runner-ok-after-billing-check"
+          echo "linux-runner-ok"
+          uname -a
+
+  smoke-macos:
+    runs-on: macos-14
+    steps:
+      - name: macOS runner is alive
+        run: |
+          echo "macos-runner-ok"
           uname -a
