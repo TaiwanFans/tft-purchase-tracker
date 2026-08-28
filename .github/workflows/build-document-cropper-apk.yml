@@ -30,7 +30,7 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Apply v1.5.5 release patches
+      - name: Apply v1.5.6 release patches
         working-directory: android-document-cropper
         run: |
           sed -i "s/^guide box')/'guide box')/" patch_v140.py
@@ -42,20 +42,27 @@ jobs:
           python3 patch_v154.py
           python3 patch_v155.py
           python3 patch_v155_fix.py
+          python3 patch_v156.py
           python3 - <<'PY'
           from pathlib import Path
           import xml.etree.ElementTree as ET
           build = Path('app/build.gradle').read_text(encoding='utf-8')
+          main = Path('app/src/main/java/com/quanyi/docscanner/MainActivity.java').read_text(encoding='utf-8')
           crop = Path('app/src/main/java/com/quanyi/docscanner/DocumentCropView.java').read_text(encoding='utf-8')
           image = Path('app/src/main/java/com/quanyi/docscanner/ImageUtils.java').read_text(encoding='utf-8')
-          assert "versionName '1.5.5'" in build
+          assert "versionName '1.5.6'" in build
+          assert 'versionCode 156' in build
           assert 'cropSideInsetPx' in crop and '0.090f' in crop and 'dp(110)' in crop
-          assert 'best.score < 120.0' in image and 'new Scalar(0, 0, 92)' in image
+          assert 'loadBitmapExact' in main and 'outputMaxDimension()' in main
+          assert '文字銳利' in main and '自然灰階' in main and '灰階清晰' in main
+          assert 'best.score < 70.0' in image and 'nearFramePenalty' in image
+          assert 'perspectiveCrop(Bitmap src, PointF[] p, int maxOutputDim)' in image
+          assert 'adaptiveThreshold(temp, processed' in image
           ET.parse('app/src/main/res/drawable/ic_pixel_document.xml')
-          print('v1.5.5 source verification OK')
+          print('v1.5.6 source verification OK')
           PY
 
-      - name: Build debug APK
+      - name: Compile and build debug APK
         working-directory: android-document-cropper
         run: gradle :app:assembleDebug --stacktrace
 
@@ -64,11 +71,12 @@ jobs:
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk
           unzip -t app/build/outputs/apk/debug/app-debug.apk >/dev/null
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
           echo "APK archive validation OK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: document-cropper-apk-v155
+          name: document-cropper-apk-v156
           path: android-document-cropper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
