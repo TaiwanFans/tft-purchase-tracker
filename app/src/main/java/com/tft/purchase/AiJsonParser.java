@@ -16,10 +16,10 @@ public final class AiJsonParser {
     public static PurchaseOcrParser.ParsedPurchase parse(String response, String ocrEvidence) {
         PurchaseOcrParser.ParsedPurchase out = new PurchaseOcrParser.ParsedPurchase();
         StringBuilder raw = new StringBuilder();
-        raw.append("[AI_PIPELINE:replaceable provider + PP-OCRv6 Medium tiled + ML Kit + local knowledge]\n");
+        raw.append("[AI_PIPELINE:v2.0.19 PP-OCRv6 Small tiled + ML Kit + OpenCV table-grid + local MiniCPM verifier]\n");
         if (ocrEvidence != null && !ocrEvidence.trim().isEmpty()) {
             String o = ocrEvidence.trim();
-            if (o.length() > 18000) o = o.substring(0, 18000);
+            if (o.length() > 22000) o = o.substring(0, 22000);
             raw.append("[OCR_EVIDENCE]\n").append(o).append("\n[/OCR_EVIDENCE]\n");
         }
         raw.append("[MODEL_JSON]\n").append(response == null ? "" : response);
@@ -39,7 +39,7 @@ public final class AiJsonParser {
         JSONArray arr = root.optJSONArray("items");
         if (arr != null) {
             Set<String> seen = new HashSet<>();
-            for (int n = 0; n < arr.length() && out.items.size() < 40; n++) {
+            for (int n = 0; n < arr.length() && out.items.size() < 50; n++) {
                 JSONObject j = arr.optJSONObject(n);
                 if (j == null) continue;
 
@@ -57,7 +57,7 @@ public final class AiJsonParser {
                 if (!isRealRow(item)) continue;
                 if (!item.lineNo.isEmpty() && !seen.add(item.lineNo)) continue;
                 if (item.description.isEmpty() && !item.specification.isEmpty()) {
-                    item.description = "需要人工確認";
+                    if (item.note.isEmpty()) item.note = "品名待確認；規格已有影像/OCR證據";
                 }
 
                 JSONArray itemConfirm = j.optJSONArray("needs_confirmation");
@@ -71,7 +71,7 @@ public final class AiJsonParser {
             }
         }
 
-        if (confirm.length() > 0) out.rawText += "\n[NEEDS_CONFIRMATION]\n" + confirm;
+        if (confirm.length() > 0) out.rawText += "\n[NEEDS_CONFIRMATION_FIELDS]\n" + confirm;
         try {
             if (TftApplication.appContext() != null) {
                 new RecognitionKnowledgeDb(TftApplication.appContext()).applyKnownRules(out, ocrEvidence);
@@ -104,25 +104,30 @@ public final class AiJsonParser {
         String[] banned = {
                 "以下空白", "本頁小計", "頁小計", "稅額", "總計", "合計", "FAXED", "FAX",
                 "注意事項", "出貨說明", "回傳說明", "簽章", "公司機密", "禁止外洩", "禁止外泄",
-                "24小時內回傳", "收到本採購單後", "彰化地方法院", "審核", "主管", "經辦人", "廠商確認"
+                "24小時內回傳", "收到本採購單後", "彰化地方法院", "審核", "主管", "經辦人", "廠商確認",
+                "三相與單相同價", "原物料持續調漲", "訂貨交貨及付款方式", "以上報價為", "不含安裝",
+                "若有任何疑問", "業務聯絡", "進口產品", "每批購買數量越多"
         };
         for (String s : banned) if (d.contains(compact(s))) return false;
-        if (!item.lineNo.isEmpty() && !item.lineNo.matches("\\d{3}")) return false;
+        if (!item.lineNo.isEmpty() && !item.lineNo.matches("\\d{3,4}")) return false;
         boolean evidence = !item.lineNo.isEmpty() || !compact(item.description).isEmpty()
                 || !compact(item.specification).isEmpty() || !item.quantity.isEmpty()
-                || !item.unit.isEmpty() || !item.deliveryDate.isEmpty();
+                || !item.unit.isEmpty() || !item.unitPrice.isEmpty() || !item.subtotal.isEmpty()
+                || !item.deliveryDate.isEmpty();
         if (!evidence) return false;
         Double q = parseNumber(item.quantity);
         return q == null || Math.abs(q) > 0.0000001d;
     }
 
+    /** Preserve source width: 0001 stays 0001; legacy 001 stays 001. */
     private static String normalizeLineNo(String s) {
         String x = clean(s).replaceAll("[^0-9]", "");
-        if (x.isEmpty() || x.length() > 3) return "";
+        if (x.isEmpty() || x.length() > 4) return "";
         try {
             int n = Integer.parseInt(x);
-            if (n <= 0 || n > 999) return "";
-            return String.format(Locale.TAIWAN, "%03d", n);
+            if (n <= 0 || n > 9999) return "";
+            int width = x.length() >= 4 ? 4 : 3;
+            return String.format(Locale.TAIWAN, "%0" + width + "d", n);
         } catch (Throwable ignored) { return ""; }
     }
 
