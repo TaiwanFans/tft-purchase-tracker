@@ -6,12 +6,13 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/**
- * Deterministic guardrail after Gemma vision.
- * V2.0.8 sanitizes hallucinations but keeps useful partial rows so the user always gets a visible AI result.
- */
+/** Deterministic final guardrail. AI output is never written to the DB without passing here. */
 public final class AiResultValidator {
     private AiResultValidator() {}
+
+    private static final String[] SELF_COMPANY = {
+            "全益畜牧器具公司", "全益", "台灣電扇科技有限公司", "台灣電扇", "全益台灣電扇"
+    };
 
     public static Validation validateAndSanitize(PurchaseOcrParser.ParsedPurchase p) {
         Validation v = new Validation();
@@ -25,13 +26,24 @@ public final class AiResultValidator {
         p.orderNo = digitsOnly(p.orderNo);
         p.purchaseDate = date(p.purchaseDate);
 
+        // Final safety layer: even if OCR/AI/knowledge matching made a mistake, own-company names
+        // are prohibited from reaching vendor_name in the purchase database.
+        if (isSelfCompany(p.vendor)) {
+            String rejected = p.vendor;
+            p.vendor = "";
+            v.problems.add("SELF_COMPANY：供應廠商誤抓到我方公司，已清空等待確認");
+            p.rawText = safe(p.rawText) + "\n[SELF_COMPANY_REJECTED] " + rejected;
+        }
+
         if (p.vendor.length() < 2) v.problems.add("供應廠商不完整");
         if (!p.orderNo.matches("20\\d{10}")) v.problems.add("採購單號不是 12 碼");
         if (p.purchaseDate.isEmpty()) v.problems.add("採購日期無法確認");
 
         if (p.orderNo.matches("20\\d{10}") && !p.purchaseDate.isEmpty()) {
             String prefix = p.purchaseDate.replace("-", "");
-            if (!p.orderNo.startsWith(prefix)) v.problems.add("採購單號日期前綴與採購日期不一致");
+            if (!p.orderNo.startsWith(prefix)) {
+                v.problems.add("ORDER_NUMBER_DATE_CONFLICT：採購單號日期前綴與採購日期不一致");
+            }
         }
 
         List<PurchaseDbHelper.PurchaseItem> kept = new ArrayList<>();
@@ -42,6 +54,7 @@ public final class AiResultValidator {
                 if (i == null) continue;
                 i.lineNo = normalizeLine(i.lineNo);
                 i.description = clean(i.description);
+                i.specification = clean(i.specification);
                 i.quantity = numericText(i.quantity);
                 i.unit = clean(i.unit);
                 i.unitPrice = numericText(i.unitPrice);
@@ -49,12 +62,10 @@ public final class AiResultValidator {
                 i.deliveryDate = date(i.deliveryDate);
                 i.note = clean(i.note);
 
-                // Hard filters: these are definitely not purchase items.
-                if (i.description.isEmpty()) continue;
-                if (containsFooterText(i.description)) continue;
+                String combined = i.description + " " + i.specification;
+                if (combined.trim().isEmpty()) continue;
+                if (containsFooterText(combined)) continue;
 
-                // Keep a plausible table row even when one required field is uncertain.
-                // This lets the user see the AI result and re-run AI instead of losing the whole document.
                 boolean hasRowEvidence = !i.quantity.isEmpty() || !i.unit.isEmpty() ||
                         !i.unitPrice.isEmpty() || !i.subtotal.isEmpty() || !i.deliveryDate.isEmpty();
                 if (!hasRowEvidence) continue;
@@ -67,22 +78,30 @@ public final class AiResultValidator {
                 if (!p.purchaseDate.isEmpty() && !i.deliveryDate.isEmpty()) {
                     long diff = dayDiff(p.purchaseDate, i.deliveryDate);
                     if (diff < -1) {
-                        // Do not trust a delivery date before the purchase date; blank it, but keep the row.
                         i.deliveryDate = "";
+                        addNote(i, "DATE_CONFLICT：交貨日期早於採購日期，請確認");
                         v.problems.add("品項 " + rowName(i, rowIndex) + " 交貨日期疑似錯誤");
                     }
                 }
 
-                // Money is secondary. If arithmetic disagrees, blank money rather than deleting the item.
                 Double price = number(i.unitPrice);
                 Double subtotal = number(i.subtotal);
-                if (q != null && q > 0 && price != null && subtotal != null) {
+                if (q != null && q > 0 && price != null && price > 0 && subtotal != null && subtotal >= 0) {
                     double expected = q * price;
                     double tolerance = Math.max(2.0, Math.abs(expected) * 0.015);
                     if (Math.abs(expected - subtotal) > tolerance) {
-                        i.unitPrice = "";
-                        i.subtotal = "";
-                        v.problems.add("品項 " + rowName(i, rowIndex) + " 金額欄位不一致");
+                        String originalQuantity = i.quantity;
+                        double candidate = subtotal / price;
+                        String candidateText = candidate > 0 && candidate < 1000000
+                                ? formatCandidate(candidate) : "";
+                        // Do not silently replace 2 with 200. Blank the quantity so an inconsistent OCR
+                        // number can never look accepted; show the arithmetic candidate only as evidence.
+                        i.quantity = "";
+                        String msg = "NUMBER_CONFLICT：數量 " + originalQuantity + " × 單價 " + i.unitPrice +
+                                " ≠ 小計 " + i.subtotal;
+                        if (!candidateText.isEmpty()) msg += "；計算候選數量=" + candidateText + "（需人工確認）";
+                        addNote(i, msg);
+                        v.problems.add("品項 " + rowName(i, rowIndex) + " NUMBER_CONFLICT");
                     }
                 }
                 kept.add(i);
@@ -102,6 +121,19 @@ public final class AiResultValidator {
         return v;
     }
 
+    public static boolean isSelfCompany(String text) {
+        String n = norm(text);
+        if (n.isEmpty()) return false;
+        for (String self : SELF_COMPANY) {
+            String s = norm(self);
+            if (n.equals(s)) return true;
+            // Short aliases such as 全益/台灣電扇 should only match the complete normalized value,
+            // while long legal/company aliases may safely match inside OCR decorations.
+            if (s.length() >= 6 && n.contains(s)) return true;
+        }
+        return false;
+    }
+
     private static String rowName(PurchaseDbHelper.PurchaseItem i, int index) {
         return i.lineNo == null || i.lineNo.isEmpty() ? String.valueOf(index) : i.lineNo;
     }
@@ -117,10 +149,10 @@ public final class AiResultValidator {
     }
 
     private static boolean containsFooterText(String s) {
-        String x = s.replaceAll("\\s+", "");
+        String x = safe(s).replaceAll("\\s+", "");
         String[] bad = {
-                "以下空白","本頁小計","頁小計","稅額","總計","合計","出貨時請標註","出貨時請標柱",
-                "公司機密","禁止外洩","禁止外泄","24小時內回傳","收到本採購單後",
+                "以下空白","本頁小計","頁小計","稅額","總計","合計","注意事項","出貨說明","回傳說明","簽章",
+                "出貨時請標註","出貨時請標柱","公司機密","禁止外洩","禁止外泄","24小時內回傳","收到本採購單後",
                 "如內容文字及交期","無誤後蓋章","如發生糾紛","地方法院","審核","主管","經辦人","廠商確認",
                 "FAXED","傳真","回傳04-823-5682"
         };
@@ -158,6 +190,16 @@ public final class AiResultValidator {
         } catch (Exception e) { return null; }
     }
 
+    private static String formatCandidate(double v) {
+        if (Math.abs(v - Math.rint(v)) < 0.0001) return String.format(Locale.US, "%.0f", v);
+        return String.format(Locale.US, "%.3f", v).replaceAll("0+$", "").replaceAll("\\.$", "");
+    }
+
+    private static void addNote(PurchaseDbHelper.PurchaseItem i, String note) {
+        if (i.note == null || i.note.trim().isEmpty()) i.note = note;
+        else if (!i.note.contains(note)) i.note += "｜" + note;
+    }
+
     private static String digitsOnly(String s) {
         return s == null ? "" : s.replaceAll("[^0-9]", "");
     }
@@ -165,6 +207,12 @@ public final class AiResultValidator {
     private static String clean(String s) {
         return s == null ? "" : s.replace('\u3000', ' ').replaceAll("[ \\t]+", " ").trim();
     }
+
+    private static String norm(String s) {
+        return safe(s).toUpperCase(Locale.TAIWAN).replaceAll("[\\s　:：,，.。()（）/\\-＿_]+", "").trim();
+    }
+
+    private static String safe(String s) { return s == null ? "" : s; }
 
     private static String join(List<String> xs) {
         StringBuilder b = new StringBuilder();
