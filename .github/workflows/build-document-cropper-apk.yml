@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,7 +30,7 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Apply v1.5.4 release patches
+      - name: Apply v1.5.5 release patches
         working-directory: android-document-cropper
         run: |
           sed -i "s/^guide box')/'guide box')/" patch_v140.py
@@ -40,18 +40,21 @@ jobs:
           python3 patch_v152_fix.py
           python3 patch_v153.py
           python3 patch_v154.py
-          grep -q "versionName '1.5.4'" app/build.gradle
+          python3 patch_v155.py
+          grep -q "versionName '1.5.5'" app/build.gradle
           grep -q 'cropSideInsetPx' app/src/main/java/com/quanyi/docscanner/DocumentCropView.java
-          grep -q 'float best=dp(94)' app/src/main/java/com/quanyi/docscanner/DocumentCropView.java
+          grep -q 'getWidth() \* 0.090f' app/src/main/java/com/quanyi/docscanner/DocumentCropView.java
+          grep -q 'float best=dp(110)' app/src/main/java/com/quanyi/docscanner/DocumentCropView.java
+          grep -q 'best.score < 120.0' app/src/main/java/com/quanyi/docscanner/ImageUtils.java
+          grep -q 'new Scalar(0, 0, 92)' app/src/main/java/com/quanyi/docscanner/ImageUtils.java
+          grep -q 'areaRatio < 0.05' app/src/main/java/com/quanyi/docscanner/ImageUtils.java
           grep -q 'Button backTop = button("← 返回", false)' app/src/main/java/com/quanyi/docscanner/MainActivity.java
           grep -q 'Button editTop = button("← 修改裁切", false)' app/src/main/java/com/quanyi/docscanner/MainActivity.java
-          grep -q 'Button homeTop = button("⌂ 首頁", false)' app/src/main/java/com/quanyi/docscanner/MainActivity.java
           grep -q 'buildFinalDocumentBitmap' app/src/main/java/com/quanyi/docscanner/MainActivity.java
-          grep -q 'createCLAHE(2.35' app/src/main/java/com/quanyi/docscanner/ImageUtils.java
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
           ET.parse('app/src/main/res/drawable/ic_pixel_document.xml')
-          print('v1.5.4 source verification OK')
+          print('v1.5.5 source verification OK')
           PY
 
       - name: Build debug APK
@@ -68,6 +71,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: document-cropper-apk-v154
+          name: document-cropper-apk-v155
           path: android-document-cropper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
