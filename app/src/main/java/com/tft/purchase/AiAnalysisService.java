@@ -15,7 +15,7 @@ import java.util.ArrayList;
 /** Foreground service for the offline document/OCR/AI/validation pipeline. */
 public class AiAnalysisService extends Service {
     public static final String ACTION_UPDATE = "com.tft.purchase.AI_JOB_UPDATE";
-    private static final String CHANNEL = "local_ai_analysis_v217";
+    private static final String CHANNEL = "local_ai_analysis_v219";
     private static final int NOTIFICATION_ID = 8235708;
     private volatile boolean processing = false;
     private int created = 0;
@@ -72,7 +72,6 @@ public class AiAnalysisService extends Service {
         }
 
         if (index >= snapshot.queue.size()) {
-            // Reload once more to close the tiny race where a photo was appended exactly between items.
             AiJobStore.Snapshot verify = AiJobStore.get(this);
             if (index < verify.queue.size()) {
                 processNext(index);
@@ -82,7 +81,7 @@ public class AiAnalysisService extends Service {
             AiJobStore.done(this, created, warnings);
             String msg;
             if (created <= 0) msg = "AI 分析結束，但沒有建立採購單";
-            else if (warnings > 0) msg = "排隊完成：已建立 " + created + " 張；" + warnings + " 張需要人工確認";
+            else if (warnings > 0) msg = "排隊完成：已建立 " + created + " 張；" + warnings + " 張有局部欄位需確認";
             else msg = "排隊完成：已建立 " + created + " 張採購單";
             publish(msg, 100, true);
             sendUpdate();
@@ -124,7 +123,7 @@ public class AiAnalysisService extends Service {
         }, new AiModelCallback() {
             @Override public void onSuccess(String response) {
                 try {
-                    updateJob(index, 97, positionText(index) + "｜規則驗證：我方公司、日期、數量與金額");
+                    updateJob(index, 97, positionText(index) + "｜欄位級驗證：交易角色、表格列、日期與金額");
                     PurchaseOcrParser.ParsedPurchase parsed = AiJsonParser.parse(response, ocrEvidence);
                     AiResultValidator.Validation validation = AiResultValidator.validateAndSanitize(parsed);
                     boolean reliable = validation.reliable;
@@ -135,7 +134,7 @@ public class AiAnalysisService extends Service {
                     AiJobStore.checkpointNextIndex(AiAnalysisService.this, index + 1, created, warnings);
                     String stage = reliable
                             ? "第 " + (index + 1) + " 張已建立採購單 ✓"
-                            : "第 " + (index + 1) + " 張已建立；衝突／不確定欄位需要人工確認";
+                            : "第 " + (index + 1) + " 張已建立；只有標記欄位需要確認";
                     updateJob(index, 99, stage);
                 } catch (Throwable t) {
                     try {
@@ -220,13 +219,16 @@ public class AiAnalysisService extends Service {
         if (AiResultValidator.isSelfCompany(p.vendorName)) {
             p.vendorName = "";
             reliable = false;
-            validationMessage = "SELF_COMPANY：供應廠商誤抓到我方公司，已清空等待確認";
+            validationMessage = "SELF_COMPANY：交易對象誤抓到我方公司，已只清空此欄等待確認";
         }
         p.location = parsed.location == null ? "" : parsed.location;
         p.orderNo = parsed.orderNo == null ? "" : parsed.orderNo;
         p.purchaseDate = parsed.purchaseDate == null ? "" : parsed.purchaseDate;
         p.imagePath = imagePath == null ? "" : imagePath;
-        p.rawOcr = (reliable ? "[AI_STATUS:OK]" : "[AI_STATUS:RETRY]") +
+
+        boolean hardFailure = parsed.rawText != null && parsed.rawText.contains("[AI_STATUS:RETRY]");
+        String aiStatus = hardFailure ? "RETRY" : (reliable ? "OK" : "PARTIAL");
+        p.rawOcr = "[AI_STATUS:" + aiStatus + "]" +
                 "\n[AI_VALIDATION:" + (validationMessage == null ? "" : validationMessage) + "]\n" +
                 (parsed.rawText == null ? "" : parsed.rawText);
         p.signatureReturnDate = preservedSignature == null ? "" : preservedSignature;
@@ -278,8 +280,8 @@ public class AiAnalysisService extends Service {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if (nm == null) return;
-        NotificationChannel c = new NotificationChannel(CHANNEL, "本機採購單辨識與排隊", NotificationManager.IMPORTANCE_LOW);
-        c.setDescription("排隊處理文件校正、分區 PP-OCRv6、ML Kit、局部 MiniCPM 與規則驗證進度");
+        NotificationChannel c = new NotificationChannel(CHANNEL, "採購單追蹤｜本機 AI 排隊", NotificationManager.IMPORTANCE_LOW);
+        c.setDescription("排隊處理文件校正、PP-OCRv6 Small、OpenCV 表格列欄綁定、ML Kit 與局部 MiniCPM 驗證");
         c.setSound(null, null);
         nm.createNotificationChannel(c);
     }
@@ -293,7 +295,7 @@ public class AiAnalysisService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         b.setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(finished ? "全益採購追蹤｜AI 排隊完成" : "全益採購追蹤｜AI 分析排隊中")
+                .setContentTitle(finished ? "採購單追蹤｜AI 排隊完成" : "採購單追蹤｜AI 分析排隊中")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOnlyAlertOnce(true)
