@@ -111,23 +111,23 @@ jobs:
             adb shell am start -W -n com.quanyi.docscanner/.MainActivity | tee /tmp/app-start.txt
             grep -q 'Status: ok' /tmp/app-start.txt
             sleep 5
-            PID=$(adb shell pidof com.quanyi.docscanner | tr -d '\r')
-            test -n "$PID"
+            adb shell pidof com.quanyi.docscanner | grep -Eq '[0-9]+'
             adb shell dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivity' | grep -q 'com.quanyi.docscanner'
             adb exec-out screencap -p > /tmp/v2-home.png
             test -s /tmp/v2-home.png
-            if adb logcat -d -t 500 | grep -E 'FATAL EXCEPTION|Process: com\.quanyi\.docscanner.*PID|AndroidRuntime.*FATAL'; then
-              echo 'Crash detected during startup smoke test'
-              exit 1
-            fi
-            echo "V2 emulator startup smoke test OK; PID=$PID"
+            adb logcat -d -v threadtime > /tmp/v2-logcat.txt
+            if grep -E 'Process: com\.quanyi\.docscanner, PID:' /tmp/v2-logcat.txt; then echo 'App crash detected'; grep -E -B 20 -A 60 'Process: com\.quanyi\.docscanner, PID:' /tmp/v2-logcat.txt; exit 1; fi
+            echo 'V2 emulator startup smoke test OK'
 
-      - name: Upload smoke screenshot
+      - name: Upload smoke evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: document-cropper-v2-smoke-screenshot
-          path: /tmp/v2-home.png
+          name: document-cropper-v2-smoke-evidence
+          path: |
+            /tmp/v2-home.png
+            /tmp/v2-logcat.txt
+            /tmp/app-start.txt
           if-no-files-found: ignore
 
       - name: Upload final v2 APK
