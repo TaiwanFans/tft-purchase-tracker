@@ -43,7 +43,6 @@ public class GemmaSetupActivity extends Activity {
         root.setPadding(dp(18),dp(18),dp(18),dp(16));
         root.setBackgroundColor(Color.rgb(245,248,255));
 
-        // Fixed compact header: always visible, but no longer consumes most of the screen.
         LinearLayout titleRow=new LinearLayout(this);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
@@ -54,11 +53,10 @@ public class GemmaSetupActivity extends Activity {
         tt.setOrientation(LinearLayout.VERTICAL);
         tt.setPadding(dp(12),0,0,0);
         tt.addView(label("採購單追蹤",24,Color.rgb(15,42,92),true));
-        tt.addView(label("離線 OCR + MiniCPM AI 辨識",13,Color.rgb(37,99,235),true));
+        tt.addView(label("離線 OCR + 表格結構 + MiniCPM 核對",13,Color.rgb(37,99,235),true));
         titleRow.addView(tt,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
         root.addView(titleRow);
 
-        // Only the information/status area scrolls. Action buttons below stay fixed and reachable.
         ScrollView scroll=new ScrollView(this);
         scroll.setFillViewport(false);
         scroll.setVerticalScrollBarEnabled(true);
@@ -74,11 +72,11 @@ public class GemmaSetupActivity extends Activity {
         LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);
         cp.setMargins(0,dp(10),0,dp(12));
         content.addView(card,cp);
-        card.addView(label("V2.0.18｜功能說明（可上下滑動）",17,Color.rgb(15,42,92),true));
-        card.addView(label("採購單會先做方向、紙張、透視校正、去陰影與去噪，再切成 H1/H2/R1/R2/R3/R4 高解析區域。每區放大後由 PP-OCRv6 Small ONNX Runtime + Google ML Kit 掃描，再把座標拼回完整採購單。",14,Color.rgb(71,85,105),false));
-        card.addView(label("MiniCPM 會核對高解析分區，以及 OCR 衝突或低信心的局部圖，用來補救漏字與誤讀；看不清楚的內容會留空，不亂猜。",14,Color.rgb(22,101,52),true));
-        card.addView(label("AI 分析支援排隊與背景處理：分析時仍能繼續新增照片、查看等待順序與進度，完成後可從排隊列表直接開啟結果。",14,Color.rgb(22,101,52),true));
-        card.addView(label("辨識知識庫可從設定新增、修改、刪除廠商、地址、關鍵字與常購品項；全益／台灣電扇等我方名稱固定禁止當成供應廠商。",14,Color.rgb(22,101,52),true));
+        card.addView(label("V2.0.19｜表格列欄綁定＋欄位級確認",17,Color.rgb(15,42,92),true));
+        card.addView(label("文件先做方向、透視、去陰影與去噪，再由 PP-OCRv6 Small ONNX + Google ML Kit 分區辨識。新版會用 OpenCV 偵測表格橫線／直線，把文字永久綁回同一列與同一欄，禁止跨列拼數量、單價或小計。",14,Color.rgb(71,85,105),false));
+        card.addView(label("MiniCPM 現在主要當局部核對器：先遵守 TO／開立方／單據號碼等表頭角色與表格 Cell，再只處理 OCR 衝突、低信心與漏列。單一欄位有問題不會再把整張文件判成全部待確認。",14,Color.rgb(22,101,52),true));
+        card.addView(label("品項列號會保留來源位數，例如 0001 不再改成 001；規格中的『6英吋』『220V』也禁止被誤當數量。數學衝突只會標記該列，不再用錯誤小計反推候選數量。",14,Color.rgb(22,101,52),true));
+        card.addView(label("AI 分析支援排隊與背景處理；辨識知識庫可隨時編輯。我方全益／台灣電扇名稱仍固定禁止當成交易對象／供應廠商。",14,Color.rgb(22,101,52),true));
         card.addView(label("MiniCPM-V 4.6 約 1.6 GB。PP-OCRv6 Small ONNX 已包在 APK；Google 文件掃描與中文 OCR 第一次有網路時由 Play services 準備，之後可離線使用。",13,Color.rgb(100,116,139),false));
 
         status=label("檢查 MiniCPM-V 4.6 模型中…",14,Color.rgb(71,85,105),false);
@@ -94,7 +92,6 @@ public class GemmaSetupActivity extends Activity {
         scrollParams.setMargins(0,dp(4),0,dp(8));
         root.addView(scroll,scrollParams);
 
-        // Fixed action area: the user can always enter the app without scrolling to the bottom.
         LinearLayout actions=new LinearLayout(this);
         actions.setOrientation(LinearLayout.VERTICAL);
         actions.setPadding(0,dp(4),0,0);
@@ -116,7 +113,7 @@ public class GemmaSetupActivity extends Activity {
 
     private void refresh() {
         if(MiniCpmV46ModelManager.isReady(this)){
-            status.setText("MiniCPM-V 4.6 已就緒 ✓\nMD5 + native 模型載入測試 ✓\nPP-OCRv6 Small ONNX 已內建 ✓\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(22,163,74));progress.setProgress(100);download.setText("本機 AI 模型已就緒");download.setEnabled(false);enter.setText("進入採購單追蹤");enter.setEnabled(true);return;
+            status.setText("MiniCPM-V 4.6 已就緒 ✓\nMD5 + native 模型載入測試 ✓\nPP-OCRv6 Small ONNX 已內建 ✓\nOpenCV 表格結構層已啟用 ✓\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(22,163,74));progress.setProgress(100);download.setText("本機 AI 模型已就緒");download.setEnabled(false);enter.setText("進入採購單追蹤");enter.setEnabled(true);return;
         }
         MiniCpmV46ModelManager.Status s=MiniCpmV46ModelManager.getStatus(this);
         if(validating){status.setText("模型下載完成，正在核對官方 MD5 並執行 native 載入測試…\n第一次載入可能需要較多記憶體。\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(202,138,4));progress.setProgress(100);download.setEnabled(false);return;}
