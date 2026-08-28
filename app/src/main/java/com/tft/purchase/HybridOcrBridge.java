@@ -6,8 +6,8 @@ import java.io.File;
 
 /**
  * High-accuracy OCR entry point.
- * V2.0.17: document correction -> H1/H2/R1-R4 enlarged tiles -> dual OCR -> global coordinates ->
- * representative high-resolution visual inspection sheet for the replaceable local AI provider.
+ * V2.0.19: document correction -> enlarged dual OCR -> global coordinates -> deterministic
+ * header/table structure binding -> representative high-resolution visual inspection sheet.
  */
 public final class HybridOcrBridge {
     private HybridOcrBridge() {}
@@ -70,17 +70,19 @@ public final class HybridOcrBridge {
             }
 
             @Override public void onSuccess(String evidence) {
-                emitProgress(progress, 87, "雙 OCR 座標與衝突資料已重組，正在準備 AI 高解析核對區");
-                String enriched = evidence + "\n" + new RecognitionKnowledgeDb(app).buildPromptEvidence();
+                emitProgress(progress, 86, "雙 OCR 完成，正在偵測表格橫線／直線與交易角色");
+                String structured = DocumentStructureEvidence.enrich(prepared.ocrPath, evidence);
+                emitProgress(progress, 88, "正在把 OCR 文字綁定到固定表格列／欄，禁止跨列拼接");
+                String enriched = structured + "\n" + new RecognitionKnowledgeDb(app).buildPromptEvidence();
                 String inspection = "";
                 try {
-                    inspection = AiInspectionImageBuilder.build(app, prepared.visionPath, evidence);
+                    inspection = AiInspectionImageBuilder.build(app, prepared.visionPath, structured);
                 } catch (Throwable t) {
                     // Safe fallback: AI may inspect the corrected page only if crop-sheet assembly fails.
                     enriched += "\n[AI_INSPECTION_FALLBACK] high-resolution crop builder failed: " + safe(t);
                     inspection = prepared.visionPath;
                 }
-                emitProgress(progress, 89, "OCR 完成；AI 正在核對固定高解析區＋衝突局部圖");
+                emitProgress(progress, 90, "OCR 與表格結構完成；AI 只核對局部不確定欄位");
                 callback.onSuccess(new Result(enriched, prepared, inspection));
             }
 
@@ -99,7 +101,7 @@ public final class HybridOcrBridge {
             @Override public void onFailure(String e) { synchronized (state) { state.ppErr=e==null?"":e; state.done++; finish(); } }
             private void finish(){ finishFallback(context, state, prepared, progress, callback, tiledError); }
         });
-        MlKitOcrBridge.recognize(context, prepared.ocrPath, new MlKitOcrBridge.Callback() {
+        MlKitOcrBridge.recognize(context, prepared.ocrPath, new MlKitOcrBridge.Callback(){
             @Override public void onSuccess(String s) { synchronized (state) { state.ml=s==null?"":s; state.done++; finishFallback(context, state, prepared, progress, callback, tiledError); } }
             @Override public void onFailure(String e) { synchronized (state) { state.mlErr=e==null?"":e; state.done++; finishFallback(context, state, prepared, progress, callback, tiledError); } }
         });
@@ -121,11 +123,11 @@ public final class HybridOcrBridge {
         StringBuilder ev = new StringBuilder();
         ev.append("[OCR_FALLBACK_FULL_PAGE]\n")
                 .append("reason=").append(tiledError == null ? "分區 OCR 未完成" : tiledError).append('\n')
-                .append("rule=此為備援結果；所有重要欄位若不清楚必須 NEEDS_CONFIRMATION，禁止猜。\n");
+                .append("rule=此為備援結果；只能保留可直接辨識的欄位，禁止因單一衝突把整張清空。\n");
         if (!s.pp.isEmpty()) ev.append(s.pp).append('\n');
         if (!s.ml.isEmpty()) ev.append(s.ml).append('\n');
         ev.append(new RecognitionKnowledgeDb(context).buildPromptEvidence());
-        emitProgress(progress, 86, "整頁雙 OCR 備援完成，重要欄位將強制人工確認");
+        emitProgress(progress, 86, "整頁雙 OCR 備援完成；只標記真正不確定的欄位");
         callback.onSuccess(new Result(ev.toString(), prepared, prepared.visionPath));
     }
 
