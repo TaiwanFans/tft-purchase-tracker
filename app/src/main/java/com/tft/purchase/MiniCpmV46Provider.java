@@ -10,10 +10,10 @@ import com.example.minicpm_v_demo.LlamaEngine;
 
 import java.io.ByteArrayOutputStream;
 
-/** MiniCPM-V 4.6 local provider. OCR is primary; MiniCPM validates structure and visual rescue crops. */
+/** MiniCPM-V 4.6 local provider. OCR/table structure are primary; MiniCPM only verifies uncertain fields. */
 public final class MiniCpmV46Provider implements AiModelProvider {
     @Override public String id() { return AiModelRegistry.MINICPM_V46; }
-    @Override public String displayName() { return "MiniCPM-V 4.6 + 分區 PP-OCRv6 Small ONNX + ML Kit"; }
+    @Override public String displayName() { return "MiniCPM-V 4.6 + PP-OCRv6 Small + OpenCV 表格綁定"; }
     @Override public boolean isReady(Context context) { return MiniCpmV46ModelManager.isReady(context); }
 
     @Override
@@ -23,16 +23,16 @@ public final class MiniCpmV46Provider implements AiModelProvider {
         new Thread(() -> {
             try {
                 if (!isReady(app)) throw new IllegalStateException("MiniCPM-V 4.6 模型尚未下載並驗證完成");
-                notify(progress, 8, "整理 OCR 座標與高解析核對區");
+                notify(progress, 8, "整理 OCR 座標、交易角色與表格 Cell");
                 byte[] image = prepareImage(imagePath);
                 notify(progress, 20, "載入 MiniCPM-V 4.6 本機模型");
                 LlamaEngine engine = LlamaEngine.getInstance(app);
                 engine.ensureLoaded(MiniCpmV46ModelManager.modelFile(app).getAbsolutePath(), MiniCpmV46ModelManager.mmprojFile(app).getAbsolutePath());
-                notify(progress, 35, "重組分區 OCR、全域座標與廠商知識庫");
+                notify(progress, 35, "重組欄位級證據與人工確認知識庫");
                 String prompt = buildPrompt(ocrText);
-                notify(progress, 52, "MiniCPM 核對 H1/H2/R1-R4 與 OCR 衝突區");
-                String response = engine.infer(image, prompt, 1500);
-                notify(progress, 90, "檢查 AI 結構化結果");
+                notify(progress, 52, "MiniCPM 只核對衝突欄位與漏列");
+                String response = engine.infer(image, prompt, 1700);
+                notify(progress, 90, "檢查欄位級結構化結果");
                 callback.onSuccess(response == null ? "" : response);
             } catch (Throwable t) {
                 String msg = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
@@ -43,30 +43,35 @@ public final class MiniCpmV46Provider implements AiModelProvider {
 
     private static String buildPrompt(String ocrText) {
         String ocr = compactEvidence(ocrText);
-        return "你是台灣製造業採購單的『證據式欄位整理器』，不是自由生成模型。OCR 是主要字元來源；你負責版面歸屬、欄位結構，以及高解析圖片核對。\n" +
-                "DO NOT GUESS. DO NOT INFER MISSING VALUES FROM EXPERIENCE. 不確定就輸出空字串並加入 needs_confirmation。\n" +
-                "你收到的圖片是一張高解析核對圖：固定包含 H1 供應廠商/地址、H2 單號/採購日期、R1/R2/R3/R4 品項表格代表區；若 OCR 有 CONFLICT / LOW_CONFIDENCE，後面還會追加其局部放大圖。\n" +
-                "即使 OCR 沒有報衝突，也要用固定核對區檢查 OCR 是否漏字、漏列、或自信地辨識錯誤；但圖片看不清楚時仍禁止猜。\n" +
-                "OCR 已把文件切成 H1=左上供應商/地址、H2=右上單號/採購日期、R1/R2/R3/R4=重疊品項表格帶，每段都有 gx/gy/gw/gh 全域座標。\n" +
-                "PP-OCRv6 Small ONNX 與 ML Kit 同位置一致 => 高可信；CONFLICT / LOW_CONFIDENCE => 優先看對應局部圖片再決定，看不清楚必須留空。\n" +
-                "LOCAL_RECOGNITION_KNOWLEDGE 是人工確認過的本機字典。OWN_COMPANY_ALIASES 絕對不能成為 vendor；KNOWN_VENDORS/歷史品項只能做文字正規化與候選提示，不能創造本次採購內容。\n\n" +
-                "【OCR / 座標 / 衝突 / 知識庫證據】\n" + ocr + "\n【證據結束】\n\n" +
+        return "你是台灣製造業採購單／報價單的『欄位核對器』。你不是主 OCR，也不是自由生成模型。PP-OCRv6 Small、ML Kit、OpenCV 表格 Cell 與座標是主要證據。\n" +
+                "核心原則：有把握的欄位照填；只有真的不確定的那一格才加入 needs_confirmation。禁止因一個衝突把整張文件全部清空。DO NOT GUESS.\n\n" +
+                "【結構證據優先順序】\n" +
+                "1. TABLE_GRID_V219 reliable=true 時，ROW/grid_row/cell 綁定是最高優先。不同 grid_row 的數量、單位、單價、小計絕對不能互相借用。\n" +
+                "2. HEADER_ROLE_V219 用來判斷開立方、TO/收件方、單據號碼、文件日期、有效日期。\n" +
+                "3. 同位置 PP-OCR 與 ML Kit 一致為高可信；CONFLICT/LOW_CONFIDENCE 才需要看高解析局部圖。\n" +
+                "4. LOCAL_RECOGNITION_KNOWLEDGE 只能校正已出現在本張圖/OCR 的候選字，不能創造本張不存在的廠商或品項。\n\n" +
+                "【vendor 的真正定義】\n" +
+                "vendor = 本文件中『與我方交易的對方公司/counterparty』。不是『頁面最大公司名稱』。\n" +
+                "若文件開立方是我方全益，而 TO/收件方是另一家公司，vendor 必須是 TO/收件方；若 TO/收件方是我方，vendor 才取另一方。\n" +
+                "我方名稱包含：全益畜牧器具有限公司、全益畜牧器具公司、全益、台灣電扇科技有限公司、台灣電扇、全益台灣電扇。它們永遠不能輸出成 vendor。\n\n" +
+                "【OCR / 座標 / HEADER_ROLE / TABLE_GRID / 知識庫證據】\n" + ocr + "\n【證據結束】\n\n" +
                 "只輸出一個 JSON object，不要 Markdown，不要解釋：\n" +
-                "{\"vendor\":\"\",\"location\":\"\",\"order_no\":\"\",\"purchase_date\":\"\",\"items\":[{\"line_no\":\"001\",\"description\":\"\",\"specification\":\"\",\"quantity\":\"\",\"unit\":\"\",\"unit_price\":\"\",\"subtotal\":\"\",\"delivery_date\":\"\",\"note\":\"\",\"needs_confirmation\":[]}],\"needs_confirmation\":[]}\n\n" +
+                "{\"vendor\":\"\",\"location\":\"\",\"order_no\":\"\",\"purchase_date\":\"\",\"items\":[{\"line_no\":\"0001\",\"description\":\"\",\"specification\":\"\",\"quantity\":\"\",\"unit\":\"\",\"unit_price\":\"\",\"subtotal\":\"\",\"delivery_date\":\"\",\"note\":\"\",\"needs_confirmation\":[]}],\"needs_confirmation\":[]}\n\n" +
                 "強制規則：\n" +
-                "1. vendor 只從供應廠商區取值；全益畜牧器具公司、全益、台灣電扇科技有限公司、台灣電扇、全益台灣電扇以及 OWN_COMPANY_ALIASES 永遠不是供應廠商。\n" +
-                "2. H1 同時看到我方名稱與另一家公司，只能把有 OCR/圖片證據的另一家公司列為 vendor；仍不確定就 vendor=\"\" 並 needs_confirmation。\n" +
-                "3. order_no/purchase_date 主要看 H2。delivery_date 只能取 R1/R2/R3/R4 同一品項列，禁止拿表頭日期當交貨日。\n" +
-                "4. 民國年 + 1911，例如 115/08/27 = 2026-08-27；輸出 YYYY-MM-DD。\n" +
-                "5. items 必須是正式表格列。以下空白、本頁小計、注意事項、出貨說明、回傳說明、FAXED、公司機密、簽章、頁尾條款全部忽略。\n" +
-                "6. quantity 必須逐位保留。200 不得縮成 20 或 2。PP/ML 衝突且局部圖仍不清楚 => quantity=\"\" + needs_confirmation，禁止用常識補。\n" +
-                "7. description=品名；specification=同列規格，兩欄分開輸出；unit 只取單位欄，禁止跨列拼接。\n" +
-                "8. 如果 quantity × unit_price 與 subtotal 明顯不一致，不准自行修成你覺得合理的數字；保留有證據欄位，將可疑欄位留空並 needs_confirmation。\n" +
-                "9. 採購單號前 8 碼若看起來是日期且與 purchase_date 不一致，要 needs_confirmation，不得硬選。\n" +
-                "10. 已知廠商地址只有在本張 OCR/圖片確實匹配該廠商時才能補；常購品項永遠只能校正文字符合度，不能新增本張未出現品項。\n" +
-                "11. 如果固定高解析核對圖明確看到 OCR 漏掉的正式品項列，可以補入，但每個補入字元必須能在圖片中直接辨認；看不清楚就不要補。\n" +
-                "12. 每個非空值都必須可追溯到 OCR/座標/高解析圖片或唯一匹配的人工確認廠商資料。\n" +
-                "13. DO NOT GUESS：留空比猜錯好。";
+                "1. vendor 先做交易角色判斷；看到我方公司名稱只代表 issuer/recipient 之一，不能直接當 vendor。\n" +
+                "2. location 必須跟 vendor/counterparty 同一角色；不能把我方地址配給對方公司。\n" +
+                "3. order_no 只能取『單據號碼／採購單號／報價單號』錨點附近的完整號碼。禁止把日期 20260813 與品項列號 0001 拼成 202608130001。\n" +
+                "4. purchase_date 代表文件日期／採購日期／報價日期。『有效日期』只能視為 valid-until，不能當 purchase_date 或 delivery_date。\n" +
+                "5. 民國年 + 1911，例如 115/08/27 = 2026-08-27；日期輸出 YYYY-MM-DD。\n" +
+                "6. TABLE_GRID_V219 reliable=true 時，每個 item 只能從同一 ROW grid_row 的 cell 取值。description/specification、quantity、unit、unit_price、subtotal 禁止跨 row 拼接。\n" +
+                "7. 若 column_map 指出 quantity，只有該 quantity cell 的數字才能當數量。品名/規格 cell 裡的『6英吋』『220V』『IP55』都不是數量。\n" +
+                "8. line_no 必須保留來源位數；原圖 0001 就輸出 0001，不准改成 001。\n" +
+                "9. 正式商品列通常同列具有品名/規格以及數量/單位/價格之一。『三相與單相同價』『原物料持續調漲』『訂貨交貨及付款方式』『以上報價為』『以下空白』、條款、簽章不是商品。\n" +
+                "10. 文件沒有交貨日期時 delivery_date 直接留空，這不代表整列需要確認；不要拿有效日期或文件日期代替。\n" +
+                "11. quantity × unit_price 與 subtotal 不一致時，禁止用 subtotal÷price 反推一個新 quantity。只能重新看同列三個 cell；仍不確定才只標該欄位 needs_confirmation。\n" +
+                "12. needs_confirmation 必須是欄位級，例如 vendor、items[3].quantity。不要輸出『全部需要確認』『整張需要確認』這種泛化結果。\n" +
+                "13. 即使某個欄位衝突，只要其他欄位有清楚 OCR/Cell/影像證據，就必須保留那些正確欄位，不得一起清空。\n" +
+                "14. 高解析圖只用來核對 OCR/Cell 衝突與漏列。看不清楚就留空；禁止憑歷史品項或常識補字。";
     }
 
     private static String compactEvidence(String input) {
@@ -75,9 +80,9 @@ public final class MiniCpmV46Provider implements AiModelProvider {
         for (String line : input.split("\\n")) {
             if (line.contains("region=FOOTER")) continue;
             out.append(line).append('\n');
-            if (out.length() >= 20000) break;
+            if (out.length() >= 26000) break;
         }
-        if (out.length() > 20000) out.setLength(20000);
+        if (out.length() > 26000) out.setLength(26000);
         return out.toString();
     }
 
