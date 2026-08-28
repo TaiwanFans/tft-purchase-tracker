@@ -53,12 +53,12 @@ public final class HybridOcrBridge {
 
     public static void recognize(Context context, String sourcePath, Progress progress, Callback callback) {
         final Context app = context.getApplicationContext();
-        notify(progress, 8, "正在讀取 EXIF 與校正照片方向");
+        emitProgress(progress, 8, "正在讀取 EXIF 與校正照片方向");
         final DocumentPreprocessor.Prepared prepared;
         try {
-            notify(progress, 12, "正在找出紙張邊界、透視校正、去陰影與去噪");
+            emitProgress(progress, 12, "正在找出紙張邊界、透視校正、去陰影與去噪");
             prepared = DocumentPreprocessor.prepare(app, sourcePath);
-            notify(progress, 20, "文件校正完成，準備切割 H1/H2/R1/R2/R3");
+            emitProgress(progress, 20, "文件校正完成，準備切割 H1/H2/R1/R2/R3");
         } catch (Throwable t) {
             callback.onFailure("採購單影像前處理失敗：" + safe(t));
             return;
@@ -66,11 +66,11 @@ public final class HybridOcrBridge {
 
         ZoomTiledOcrBridge.recognize(app, prepared.ocrPath, new ZoomTiledOcrBridge.Callback() {
             @Override public void onProgress(int percent, String stage) {
-                notify(progress, percent, stage);
+                emitProgress(progress, percent, stage);
             }
 
             @Override public void onSuccess(String evidence) {
-                notify(progress, 87, "雙 OCR 座標與衝突資料已重組，正在準備 AI 局部核對區");
+                emitProgress(progress, 87, "雙 OCR 座標與衝突資料已重組，正在準備 AI 局部核對區");
                 String enriched = evidence + "\n" + new RecognitionKnowledgeDb(app).buildPromptEvidence();
                 String inspection = "";
                 try {
@@ -80,7 +80,7 @@ public final class HybridOcrBridge {
                     enriched += "\n[AI_INSPECTION_FALLBACK] local crop builder failed: " + safe(t);
                     inspection = prepared.visionPath;
                 }
-                notify(progress, 89, "OCR 階段完成；AI 只核對衝突／低信心局部圖片");
+                emitProgress(progress, 89, "OCR 階段完成；AI 只核對衝突／低信心局部圖片");
                 callback.onSuccess(new Result(enriched, prepared, inspection));
             }
 
@@ -92,7 +92,7 @@ public final class HybridOcrBridge {
 
     private static void fallbackFullPage(Context context, DocumentPreprocessor.Prepared prepared,
                                          Progress progress, Callback callback, String tiledError) {
-        notify(progress, 70, "分區 OCR 未完成，啟用整頁雙 OCR 備援");
+        emitProgress(progress, 70, "分區 OCR 未完成，啟用整頁雙 OCR 備援");
         final State state = new State();
         PaddleOcrBridge.recognize(context, prepared.ocrPath, new PaddleOcrCallback() {
             @Override public void onSuccess(String s) { synchronized (state) { state.pp=s==null?"":s; state.done++; finish(); } }
@@ -125,12 +125,12 @@ public final class HybridOcrBridge {
         if (!s.pp.isEmpty()) ev.append(s.pp).append('\n');
         if (!s.ml.isEmpty()) ev.append(s.ml).append('\n');
         ev.append(new RecognitionKnowledgeDb(context).buildPromptEvidence());
-        notify(progress, 86, "整頁雙 OCR 備援完成，重要欄位將強制人工確認");
+        emitProgress(progress, 86, "整頁雙 OCR 備援完成，重要欄位將強制人工確認");
         // Fallback really needs the corrected page because tiled spatial conflicts were unavailable.
         callback.onSuccess(new Result(ev.toString(), prepared, prepared.visionPath));
     }
 
-    private static void notify(Progress p, int percent, String stage) {
+    private static void emitProgress(Progress p, int percent, String stage) {
         if (p != null) p.onProgress(Math.max(1, Math.min(99, percent)), stage);
     }
 
