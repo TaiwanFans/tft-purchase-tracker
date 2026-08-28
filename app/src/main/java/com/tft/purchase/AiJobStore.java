@@ -8,7 +8,7 @@ import org.json.JSONArray;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Persistent state for long-running on-device Gemma analysis. */
+/** Persistent state for long-running on-device purchase analysis. */
 public final class AiJobStore {
     private AiJobStore() {}
     private static final String PREF = "tft_ai_jobs";
@@ -31,6 +31,7 @@ public final class AiJobStore {
                 .putString("stage", "準備 AI 分析")
                 .putInt("total", paths == null ? 0 : paths.size())
                 .putInt("current", 0)
+                .putInt("next_index", 0)
                 .putInt("success", 0)
                 .putInt("failed", 0)
                 .putInt("warning_count", 0)
@@ -53,6 +54,15 @@ public final class AiJobStore {
                 .apply();
     }
 
+    /** Called only after the current image has been persisted (success or retry placeholder). */
+    public static void checkpointNextIndex(Context c, int nextIndex, int success, int warnings) {
+        p(c).edit()
+                .putInt("next_index", Math.max(0, nextIndex))
+                .putInt("success", Math.max(0, success))
+                .putInt("warning_count", Math.max(0, warnings))
+                .apply();
+    }
+
     public static void appendId(Context c, long id) {
         SharedPreferences s = p(c);
         String old = s.getString("last_ids", "");
@@ -63,7 +73,7 @@ public final class AiJobStore {
     public static void done(Context c, int created, int warnings) {
         String stage;
         if (created <= 0) stage = "AI 分析結束，但沒有建立採購單";
-        else if (warnings > 0) stage = "已建立 " + created + " 張採購單，其中 " + warnings + " 張建議重新 AI 分析";
+        else if (warnings > 0) stage = "已建立 " + created + " 張採購單，其中 " + warnings + " 張需要人工確認";
         else stage = "已建立 " + created + " 張採購單，後續功能已可使用";
         p(c).edit()
                 .putString("state", created > 0 ? STATE_DONE : STATE_ERROR)
@@ -93,6 +103,7 @@ public final class AiJobStore {
         x.stage = s.getString("stage", "");
         x.total = s.getInt("total", 0);
         x.current = s.getInt("current", 0);
+        x.nextIndex = s.getInt("next_index", 0);
         x.success = s.getInt("success", 0);
         x.failed = s.getInt("failed", 0);
         x.warningCount = s.getInt("warning_count", 0);
@@ -130,6 +141,7 @@ public final class AiJobStore {
         public String stage = "";
         public int total;
         public int current;
+        public int nextIndex;
         public int success;
         public int failed;
         public int warningCount;
