@@ -12,13 +12,10 @@ import android.os.IBinder;
 
 import java.util.ArrayList;
 
-/**
- * Foreground service for the replaceable local AI pipeline:
- * document correction -> PP-OCRv6 Small + ML Kit -> active AiModelProvider -> validation -> existing DB.
- */
+/** Foreground service for the offline document/OCR/AI/validation pipeline. */
 public class AiAnalysisService extends Service {
     public static final String ACTION_UPDATE = "com.tft.purchase.AI_JOB_UPDATE";
-    private static final String CHANNEL = "local_ai_analysis_v213";
+    private static final String CHANNEL = "local_ai_analysis_v216";
     private static final int NOTIFICATION_ID = 8235708;
     private volatile boolean processing = false;
     private int created = 0;
@@ -37,18 +34,18 @@ public class AiAnalysisService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         createChannel();
-        startForeground(NOTIFICATION_ID, notification("準備文件校正與雙 OCR", 1, false));
+        startForeground(NOTIFICATION_ID, notification("準備文件校正與分區雙 OCR", 1, false));
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (processing) return START_STICKY;
         ArrayList<String> paths = intent == null ? null : intent.getStringArrayListExtra("paths");
         long replaceId = intent == null ? -1 : intent.getLongExtra("replace_id", -1);
+        AiJobStore.Snapshot snapshot = AiJobStore.get(this);
         if (paths == null || paths.isEmpty()) {
-            AiJobStore.Snapshot s = AiJobStore.get(this);
-            if (s.running() && s.paths != null && !s.paths.isEmpty()) {
-                paths = new ArrayList<>(s.paths);
-                replaceId = s.replaceId;
+            if (snapshot.running() && snapshot.paths != null && !snapshot.paths.isEmpty()) {
+                paths = new ArrayList<>(snapshot.paths);
+                replaceId = snapshot.replaceId;
             }
         }
         if (paths == null || paths.isEmpty()) {
@@ -58,7 +55,7 @@ public class AiAnalysisService extends Service {
 
         AiModelProvider provider = AiModelRegistry.active(this);
         if (!provider.isReady(this)) {
-            String msg = provider.displayName() + " 模型尚未下載並驗證完成";
+            String msg = provider.displayName() + " 模型尚未下載、驗證並通過載入測試";
             AiJobStore.error(this, msg);
             publish(msg, 100, true);
             stopSelf();
@@ -66,9 +63,11 @@ public class AiAnalysisService extends Service {
         }
 
         processing = true;
-        created = 0;
-        warnings = 0;
-        processNext(paths, 0, replaceId);
+        created = snapshot.running() ? snapshot.success : 0;
+        warnings = snapshot.running() ? snapshot.warningCount : 0;
+        int resumeIndex = snapshot.running() ? Math.max(0, Math.min(paths.size(), snapshot.nextIndex)) : 0;
+        if (resumeIndex > 0) publish("背景服務已恢復，從第 " + (resumeIndex + 1) + " 張繼續", 2, false);
+        processNext(paths, resumeIndex, replaceId);
         return START_STICKY;
     }
 
@@ -91,15 +90,18 @@ public class AiAnalysisService extends Service {
         final int base = (int)((index * 100f) / total);
         final int span = Math.max(1, 100 / total);
 
-        updateJob(base + 2,
-                "第 " + (index + 1) + "/" + total + " 張｜校正文件、去陰影與提升文字清晰度",
+        updateJob(base + Math.max(1, span * 4 / 100),
+                "第 " + (index + 1) + "/" + total + " 張｜準備文件辨識",
                 index, total);
 
-        HybridOcrBridge.recognize(this, originalPath, new HybridOcrBridge.Callback() {
+        HybridOcrBridge.recognize(this, originalPath, (percent, stage) -> {
+            int overall = Math.min(89, base + Math.max(1, Math.round(span * (percent / 100f))));
+            String text = "第 " + (index + 1) + "/" + total + " 張｜" + stage;
+            AiJobStore.progress(this, overall, text, index + 1, total, created, 0);
+            publish(text, overall, false);
+            sendUpdate();
+        }, new HybridOcrBridge.Callback() {
             @Override public void onSuccess(HybridOcrBridge.Result result) {
-                updateJob(base + Math.max(4, span * 22 / 100),
-                        "第 " + (index + 1) + "/" + total + " 張｜PP-OCRv6 + ML Kit 雙 OCR 完成",
-                        index, total);
                 String modelImage = result.preparedImagePath == null || result.preparedImagePath.isEmpty()
                         ? originalPath : result.preparedImagePath;
                 runLocalModel(paths, index, replaceId, originalPath, modelImage,
@@ -107,13 +109,14 @@ public class AiAnalysisService extends Service {
             }
 
             @Override public void onFailure(String error) {
-                // Keep the workflow alive: MiniCPM can still inspect the original image, but the record is warned.
-                updateJob(base + Math.max(4, span * 22 / 100),
-                        "第 " + (index + 1) + "/" + total + " 張｜雙 OCR 未完成，改由圖片 AI 判讀",
+                // OCR failure still creates a retry record. MiniCPM may inspect the original image, but the
+                // resulting record is always marked for confirmation and the photo is never discarded.
+                String evidence = "[OCR_ERROR] " + (error == null ? "雙 OCR 未完成" : error);
+                updateJob(base + Math.max(1, span * 72 / 100),
+                        "第 " + (index + 1) + "/" + total + " 張｜OCR 未完成，保留原圖並嘗試本機 AI",
                         index, total);
                 runLocalModel(paths, index, replaceId, originalPath, originalPath,
-                        "[OCR_ERROR] " + (error == null ? "雙 OCR 未完成" : error), null,
-                        total, base, span);
+                        evidence, null, total, base, span);
             }
         });
     }
@@ -124,10 +127,10 @@ public class AiAnalysisService extends Service {
                                int total, int base, int span) {
         AiModelProvider provider = AiModelRegistry.active(this);
         provider.analyze(this, modelImagePath, ocrEvidence, (percent, stage) -> {
-            int modelStart = 24;
-            int modelSpan = 71;
+            int modelStart = 89;
+            int modelSpan = 8;
             int mapped = modelStart + Math.max(0, Math.min(modelSpan, percent * modelSpan / 100));
-            int overall = Math.min(98, base + Math.max(1, (int)(span * (mapped / 100f))));
+            int overall = Math.min(97, base + Math.max(1, (int)(span * (mapped / 100f))));
             String text = "第 " + (index + 1) + "/" + total + " 張｜" + stage;
             AiJobStore.progress(this, overall, text, index + 1, total, created, 0);
             publish(text, overall, false);
@@ -135,6 +138,9 @@ public class AiAnalysisService extends Service {
         }, new AiModelCallback() {
             @Override public void onSuccess(String response) {
                 try {
+                    updateJob(Math.min(98, base + Math.max(1, span * 97 / 100)),
+                            "第 " + (index + 1) + "/" + total + " 張｜規則驗證：我方公司、日期、數量與金額",
+                            index, total);
                     PurchaseOcrParser.ParsedPurchase parsed = AiJsonParser.parse(response, ocrEvidence);
                     AiResultValidator.Validation validation = AiResultValidator.validateAndSanitize(parsed);
                     boolean reliable = validation.reliable;
@@ -144,22 +150,26 @@ public class AiAnalysisService extends Service {
                     created++;
                     if (!reliable) warnings++;
                     AiJobStore.appendId(AiAnalysisService.this, id);
+                    AiJobStore.checkpointNextIndex(AiAnalysisService.this, index + 1, created, warnings);
                     String stage = reliable
                             ? "第 " + (index + 1) + " 張已建立採購單 ✓"
-                            : "第 " + (index + 1) + " 張已建立；不確定欄位需要人工確認";
-                    AiJobStore.progress(AiAnalysisService.this, Math.min(98, base + span - 1),
+                            : "第 " + (index + 1) + " 張已建立；衝突／不確定欄位需要人工確認";
+                    AiJobStore.progress(AiAnalysisService.this, Math.min(99, base + span - 1),
                             stage, index + 1, total, created, 0);
-                    publish(stage, Math.min(98, base + span - 1), false);
+                    publish(stage, Math.min(99, base + span - 1), false);
                     sendUpdate();
                 } catch (Throwable t) {
                     try {
                         long id = savePlaceholder(originalPath,
                                 replaceId > 0 && total == 1 ? replaceId : -1,
-                                "AI 結果處理失敗：" + safeMessage(t));
+                                "AI 結果處理失敗：" + safeMessage(t), ocrEvidence);
                         created++;
                         warnings++;
                         AiJobStore.appendId(AiAnalysisService.this, id);
-                    } catch (Throwable ignored) {}
+                        AiJobStore.checkpointNextIndex(AiAnalysisService.this, index + 1, created, warnings);
+                    } catch (Throwable persistError) {
+                        AiJobStore.error(AiAnalysisService.this, "無法保存 AI 失敗紀錄：" + safeMessage(persistError));
+                    }
                 } finally {
                     if (hybridResult != null) hybridResult.cleanup();
                 }
@@ -170,15 +180,17 @@ public class AiAnalysisService extends Service {
                 try {
                     long id = savePlaceholder(originalPath,
                             replaceId > 0 && total == 1 ? replaceId : -1,
-                            error == null ? "本機 AI 分析失敗" : error);
+                            error == null ? "本機 AI 分析失敗" : error, ocrEvidence);
                     created++;
                     warnings++;
                     AiJobStore.appendId(AiAnalysisService.this, id);
-                    AiJobStore.progress(AiAnalysisService.this, Math.min(98, base + span - 1),
-                            "第 " + (index + 1) + " 張已留下原圖，可重新 AI 分析",
+                    AiJobStore.checkpointNextIndex(AiAnalysisService.this, index + 1, created, warnings);
+                    AiJobStore.progress(AiAnalysisService.this, Math.min(99, base + span - 1),
+                            "第 " + (index + 1) + " 張已留下原圖＋OCR 原始資料，可重新 AI 分析",
                             index + 1, total, created, 0);
                     sendUpdate();
-                } catch (Throwable ignored) {
+                } catch (Throwable persistError) {
+                    AiJobStore.error(AiAnalysisService.this, "AI 失敗且無法建立重試紀錄：" + safeMessage(persistError));
                 } finally {
                     if (hybridResult != null) hybridResult.cleanup();
                 }
@@ -188,15 +200,16 @@ public class AiAnalysisService extends Service {
     }
 
     private void updateJob(int progress, String text, int index, int total) {
-        int p = Math.max(1, Math.min(98, progress));
+        int p = Math.max(1, Math.min(99, progress));
         AiJobStore.progress(this, p, text, index + 1, total, created, 0);
         publish(text, p, false);
         sendUpdate();
     }
 
-    private long savePlaceholder(String imagePath, long replaceId, String reason) {
+    private long savePlaceholder(String imagePath, long replaceId, String reason, String ocrEvidence) {
         PurchaseOcrParser.ParsedPurchase p = new PurchaseOcrParser.ParsedPurchase();
-        p.rawText = "[AI_STATUS:RETRY]\n[AI_VALIDATION:" + reason + "]";
+        p.rawText = "[AI_STATUS:RETRY]\n[AI_VALIDATION:" + safe(reason) + "]\n[OCR_RAW_EVIDENCE]\n" +
+                safe(ocrEvidence) + "\n[/OCR_RAW_EVIDENCE]";
         return saveParsed(p, imagePath, replaceId, false, reason);
     }
 
@@ -216,6 +229,12 @@ public class AiAnalysisService extends Service {
         boolean preservedCompleted = p.completed;
 
         p.vendorName = parsed.vendor == null ? "" : parsed.vendor;
+        // Absolute DB-boundary guard. This is deliberately duplicated after AI validation.
+        if (AiResultValidator.isSelfCompany(p.vendorName)) {
+            p.vendorName = "";
+            reliable = false;
+            validationMessage = "SELF_COMPANY：供應廠商誤抓到我方公司，已清空等待確認";
+        }
         p.location = parsed.location == null ? "" : parsed.location;
         p.orderNo = parsed.orderNo == null ? "" : parsed.orderNo;
         p.purchaseDate = parsed.purchaseDate == null ? "" : parsed.purchaseDate;
@@ -234,6 +253,7 @@ public class AiAnalysisService extends Service {
                 if (i == null) continue;
                 if (legacy.length() > 0) legacy.append("\n");
                 legacy.append(i.description == null ? "" : i.description);
+                if (i.specification != null && !i.specification.isEmpty()) legacy.append("｜規格：").append(i.specification);
                 if (i.quantity != null && !i.quantity.isEmpty()) {
                     legacy.append(" × ").append(i.quantity).append(i.unit == null ? "" : i.unit);
                 }
@@ -253,6 +273,7 @@ public class AiAnalysisService extends Service {
         } else {
             id = db.insert(p);
         }
+        if (id <= 0) throw new IllegalStateException("SQLite 無法建立採購單紀錄");
         db.replaceItems(id, parsed.items == null ? new ArrayList<>() : parsed.items);
         try { DriveBackupHelper.backupIfDueAsync(this); } catch (Throwable ignored) {}
         return id;
@@ -264,12 +285,14 @@ public class AiAnalysisService extends Service {
         return m == null || m.trim().isEmpty() ? t.getClass().getSimpleName() : m;
     }
 
+    private static String safe(String s) { return s == null ? "" : s; }
+
     private void createChannel() {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if (nm == null) return;
-        NotificationChannel c = new NotificationChannel(CHANNEL, "本機 AI 採購單分析", NotificationManager.IMPORTANCE_LOW);
-        c.setDescription("PP-OCRv6、ML Kit 與本機 MiniCPM-V 分析採購單時顯示進度");
+        NotificationChannel c = new NotificationChannel(CHANNEL, "本機採購單辨識", NotificationManager.IMPORTANCE_LOW);
+        c.setDescription("文件校正、分區 PP-OCRv6、ML Kit、局部 MiniCPM 與規則驗證進度");
         c.setSound(null, null);
         nm.createNotificationChannel(c);
     }
@@ -283,7 +306,7 @@ public class AiAnalysisService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         b.setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(finished ? "全益採購追蹤｜AI 結果已建立" : "全益採購追蹤｜雙 OCR + MiniCPM 分析中")
+                .setContentTitle(finished ? "全益採購追蹤｜AI 結果已建立" : "全益採購追蹤｜分區 OCR + 局部 MiniCPM")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOnlyAlertOnce(true)
