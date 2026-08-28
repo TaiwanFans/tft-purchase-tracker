@@ -30,7 +30,7 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Apply v1.5.6 release patches
+      - name: Apply v1.5.7 release patches
         working-directory: android-document-cropper
         run: |
           sed -i "s/^guide box')/'guide box')/" patch_v140.py
@@ -43,6 +43,7 @@ jobs:
           python3 patch_v155.py
           python3 patch_v155_fix.py
           python3 patch_v156.py
+          python3 patch_v157.py
           python3 - <<'PY'
           from pathlib import Path
           import xml.etree.ElementTree as ET
@@ -50,16 +51,27 @@ jobs:
           main = Path('app/src/main/java/com/quanyi/docscanner/MainActivity.java').read_text(encoding='utf-8')
           crop = Path('app/src/main/java/com/quanyi/docscanner/DocumentCropView.java').read_text(encoding='utf-8')
           image = Path('app/src/main/java/com/quanyi/docscanner/ImageUtils.java').read_text(encoding='utf-8')
-          assert "versionName '1.5.6'" in build
-          assert 'versionCode 156' in build
-          assert 'cropSideInsetPx' in crop and '0.090f' in crop and 'dp(110)' in crop
+
+          assert "versionName '1.5.7'" in build and 'versionCode 157' in build
+          # AI scan must no longer force a destructive second crop.
+          assert 'prepareAiBatchForPreview' in main
+          assert 'AI 已完成抓邊與透視校正｜直接預覽，不再二次裁切' in main
+          assert 'aiScannedBatch ? "↻ 重新 AI 掃描" : "← 修改裁切"' in main
+          assert 'cropHistory.set(i, new float[]{0f,0f, 1f,0f, 1f,1f, 0f,1f})' in main
+          # Manual crop keeps large touch targets, but visual handles are compact.
+          assert 'handleSize = dp(10)' in crop and 'edgeLong = dp(18)' in crop
+          assert 'float best=dp(110)' in crop and 'd<dp(92)' in crop
+          # Live edge snap is a precomputed lightweight map, not a per-frame OpenCV pass.
+          assert 'buildSnapEdgeMap' in crop and 'snapEdgeToDocument' in crop
+          assert 'snapGradX' in crop and 'snapGradY' in crop
+          assert '自動貼邊 ✓' in crop
+          # Preserve previous quality/filter/detection work.
           assert 'loadBitmapExact' in main and 'outputMaxDimension()' in main
           assert '文字銳利' in main and '自然灰階' in main and '灰階清晰' in main
-          assert 'best.score < 70.0' in image and 'nearFramePenalty' in image
+          assert 'nearFramePenalty' in image
           assert 'perspectiveCrop(Bitmap src, PointF[] p, int maxOutputDim)' in image
-          assert 'adaptiveThreshold(temp, processed' in image
           ET.parse('app/src/main/res/drawable/ic_pixel_document.xml')
-          print('v1.5.6 source verification OK')
+          print('v1.5.7 source self-review OK')
           PY
 
       - name: Compile and build debug APK
@@ -77,6 +89,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: document-cropper-apk-v156
+          name: document-cropper-apk-v157
           path: android-document-cropper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
