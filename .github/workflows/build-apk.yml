@@ -37,7 +37,7 @@ jobs:
           yes | sdkmanager --licenses >/dev/null
           sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
 
-      - name: Build bundled PP-OCRv6 Medium Android SDK
+      - name: Build bundled PP-OCRv6 Small ONNX Android SDK
         run: |
           set -euxo pipefail
           git init paddleocr
@@ -47,18 +47,21 @@ jobs:
 
           SDK_DIR="$GITHUB_WORKSPACE/paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models"
           mkdir -p "$SDK_DIR/det" "$SDK_DIR/rec"
+
+          # Official Android ONNX Runtime deployment profile: PP-OCRv6_small.
+          # Pin the model repositories to immutable revisions and verify the ONNX payload hashes.
           curl -fL --retry 4 --retry-delay 3 \
-            "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx/resolve/main/inference.onnx?download=true" \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/28fe5895c24fd108c19eb3e8479f4ab385fbfc62/inference.onnx?download=true" \
             -o "$SDK_DIR/det/inference.onnx"
           curl -fL --retry 4 --retry-delay 3 \
-            "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/resolve/main/inference.onnx?download=true" \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.onnx?download=true" \
             -o "$SDK_DIR/rec/inference.onnx"
           curl -fL --retry 4 --retry-delay 3 \
-            "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/resolve/main/inference.yml?download=true" \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.yml?download=true" \
             -o "$SDK_DIR/rec/inference.yml"
 
-          echo "eb13b44b25bb36f89528b68720af8a61d9cf381176107f465db1757b65d086e1  $SDK_DIR/det/inference.onnx" | sha256sum -c -
-          echo "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba  $SDK_DIR/rec/inference.onnx" | sha256sum -c -
+          echo "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e  $SDK_DIR/det/inference.onnx" | sha256sum -c -
+          echo "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634  $SDK_DIR/rec/inference.onnx" | sha256sum -c -
 
           cd "$GITHUB_WORKSPACE/paddleocr/deploy/ppocr-android"
           chmod +x gradlew
