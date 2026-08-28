@@ -54,7 +54,6 @@ jobs:
           crop = Path('app/src/main/java/com/quanyi/docscanner/DocumentCropView.java').read_text(encoding='utf-8')
           image = Path('app/src/main/java/com/quanyi/docscanner/ImageUtils.java').read_text(encoding='utf-8')
           zoom = Path('app/src/main/java/com/quanyi/docscanner/ZoomableImageView.java').read_text(encoding='utf-8')
-
           assert "versionName '1.5.8'" in build and 'versionCode 158' in build
           assert 'prepareAiBatchForPreview' in main
           assert 'buildPreviewDocumentBitmap' in main and 'previewQualityMaxDimension' in main
@@ -67,10 +66,8 @@ jobs:
           assert 'unsharpLuminance' in image
           assert 'enhanceStrongSharpOpenCv' in image
           assert 'adaptiveThreshold(temp, processed' in image
-          # Preserve crop ergonomics + live snapping from v1.5.7.
           assert 'handleSize = dp(10)' in crop and 'float best=dp(110)' in crop
           assert 'buildSnapEdgeMap' in crop and 'snapEdgeToDocument' in crop
-          # Preserve HQ output/detection architecture.
           assert 'loadBitmapExact' in main and 'outputMaxDimension()' in main
           assert 'ImageUtils.perspectiveCrop(original, points, outputMaxDimension())' in main
           assert 'nearFramePenalty' in image
@@ -78,6 +75,17 @@ jobs:
           ET.parse('app/src/main/res/drawable/ic_pixel_document.xml')
           print('v1.5.8 source self-review OK')
           PY
+
+      - name: Upload flattened source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: document-cropper-source-v158-flattened
+          path: |
+            android-document-cropper/app
+            android-document-cropper/build.gradle
+            android-document-cropper/gradle.properties
+            android-document-cropper/settings.gradle
+          if-no-files-found: error
 
       - name: Compile and build debug APK
         working-directory: android-document-cropper
