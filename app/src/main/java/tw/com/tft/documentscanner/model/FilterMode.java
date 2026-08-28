@@ -1,0 +1,1 @@
+package tw.com.tft.documentscanner.model; public enum FilterMode { ORIGINAL, CLEAR, SOFT_WHITE, BLACK_WHITE }

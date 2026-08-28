@@ -1,0 +1,1 @@
+package tw.com.tft.documentscanner; import android.app.*;import org.opencv.android.OpenCVLoader; public class ScannerApp extends Application{private static volatile boolean ready=false;public void onCreate(){super.onCreate();try{ready=OpenCVLoader.initLocal();}catch(Throwable e){ready=false;}}public static boolean isOpenCvReady(){return ready;}}

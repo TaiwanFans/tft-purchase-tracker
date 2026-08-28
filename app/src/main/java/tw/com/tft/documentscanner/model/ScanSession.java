@@ -1,0 +1,1 @@
+package tw.com.tft.documentscanner.model; import java.util.*; public class ScanSession { public final List<ScanItem> items=new ArrayList<>(); public int currentIndex=0; public String sessionSource="GALLERY"; public ScanItem current(){if(items.isEmpty())return null;currentIndex=Math.max(0,Math.min(currentIndex,items.size()-1));return items.get(currentIndex);} }
