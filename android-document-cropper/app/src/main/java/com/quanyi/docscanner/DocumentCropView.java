@@ -46,15 +46,24 @@ public class DocumentCropView extends View {
     private float focusImageY;
     private PointF[] dragStartCorners;
 
+    // Small precomputed gradient map for live edge snapping.
+    // It is built once per image and reused during drag, so ACTION_MOVE stays cheap.
+    private int[] snapGradX;
+    private int[] snapGradY;
+    private int snapW;
+    private int snapH;
+    private boolean snapActive = false;
+
     public DocumentCropView(Context c) {
         super(c);
-        handleSize = dp(17);
-        edgeLong = dp(25);
-        edgeShort = dp(11);
+        // CamScanner-style compact visual handles. Invisible touch targets remain large.
+        handleSize = dp(10);
+        edgeLong = dp(18);
+        edgeShort = dp(7);
 
         linePaint.setColor(Color.rgb(76,255,169));
         linePaint.setStyle(Paint.Style.STROKE);
-        linePaint.setStrokeWidth(dp(3));
+        linePaint.setStrokeWidth(dp(2));
 
         handlePaint.setColor(Color.rgb(245,250,250));
         handlePaint.setStyle(Paint.Style.FILL);
@@ -84,6 +93,7 @@ public class DocumentCropView extends View {
         recyclePreview();
         bitmap = b;
         previewBitmap = buildPreviewBitmap(b);
+        buildSnapEdgeMap(b);
         corners = p;
         active = -1;
         dragStartCorners = null;
@@ -150,10 +160,8 @@ public class DocumentCropView extends View {
 
         for (int i=0;i<4;i++) {
             float x=v[i*2], y=v[i*2+1];
-            c.drawRect(x-handleSize,y-handleSize,x+handleSize,y+handleSize,handlePaint);
-            c.drawRect(x-handleSize,y-handleSize,x+handleSize,y+handleSize,handleBorder);
-            c.drawLine(x-dp(6),y,x+dp(6),y,handleBorder);
-            c.drawLine(x,y-dp(6),x,y+dp(6),handleBorder);
+            c.drawCircle(x, y, handleSize, handlePaint);
+            c.drawCircle(x, y, handleSize, handleBorder);
         }
 
         drawEdgeHandle(c, midpoint(v,0,1), true);
@@ -167,10 +175,10 @@ public class DocumentCropView extends View {
     private void drawEdgeHandle(Canvas c, PointF p, boolean horizontal) {
         float hw = horizontal ? edgeLong : edgeShort;
         float hh = horizontal ? edgeShort : edgeLong;
-        c.drawRect(p.x-hw,p.y-hh,p.x+hw,p.y+hh,handlePaint);
-        c.drawRect(p.x-hw,p.y-hh,p.x+hw,p.y+hh,handleBorder);
-        if (horizontal) c.drawLine(p.x-dp(10),p.y,p.x+dp(10),p.y,handleBorder);
-        else c.drawLine(p.x,p.y-dp(10),p.x,p.y+dp(10),handleBorder);
+        RectF r = new RectF(p.x-hw,p.y-hh,p.x+hw,p.y+hh);
+        float radius = dp(7);
+        c.drawRoundRect(r, radius, radius, handlePaint);
+        c.drawRoundRect(r, radius, radius, handleBorder);
     }
 
     private void drawMagnifier(Canvas c, Bitmap drawBitmap) {
@@ -215,7 +223,7 @@ public class DocumentCropView extends View {
         c.drawCircle(lensX,lensY,radius,lensBorder);
         c.drawLine(lensX-dp(13),lensY,lensX+dp(13),lensY,lensCross);
         c.drawLine(lensX,lensY-dp(13),lensX,lensY+dp(13),lensCross);
-        c.drawText("精細 0.36×", lensX, lensY + radius + dp(16), lensLabel);
+        c.drawText(active >= 4 ? (snapActive ? "自動貼邊 ✓" : "自動貼邊") : "精細 0.36×", lensX, lensY + radius + dp(16), lensLabel);
     }
 
     private float[] mappedCorners() {
@@ -236,13 +244,27 @@ public class DocumentCropView extends View {
         return new PointF((corners[a].x+corners[b].x)/2f,(corners[a].y+corners[b].y)/2f);
     }
 
+    private float cropSideInsetPx() {
+        // True finger-safe canvas. The document itself is rendered inward,
+        // while all crop coordinates remain in original-image coordinates.
+        return clamp(getWidth() * 0.090f, dp(30), dp(46));
+    }
+
+    private float cropVerticalInsetPx() {
+        return clamp(getHeight() * 0.030f, dp(14), dp(28));
+    }
+
     private void updateMatrix() {
         if (getWidth()==0 || getHeight()==0 || bitmap==null) return;
-        float sx=getWidth()/(float)bitmap.getWidth();
-        float sy=getHeight()/(float)bitmap.getHeight();
+        float side=cropSideInsetPx();
+        float vertical=cropVerticalInsetPx();
+        float usableW=Math.max(1f,getWidth()-side*2f);
+        float usableH=Math.max(1f,getHeight()-vertical*2f);
+        float sx=usableW/(float)bitmap.getWidth();
+        float sy=usableH/(float)bitmap.getHeight();
         float s=Math.min(sx,sy);
-        float dx=(getWidth()-bitmap.getWidth()*s)/2f;
-        float dy=(getHeight()-bitmap.getHeight()*s)/2f;
+        float dx=side+(usableW-bitmap.getWidth()*s)/2f;
+        float dy=vertical+(usableH-bitmap.getHeight()*s)/2f;
         imageMatrix.reset();
         imageMatrix.postScale(s,s);
         imageMatrix.postTranslate(dx,dy);
@@ -251,11 +273,15 @@ public class DocumentCropView extends View {
 
     private void updatePreviewMatrix(Bitmap drawBitmap) {
         if (getWidth()==0 || getHeight()==0 || drawBitmap==null) return;
-        float sx=getWidth()/(float)drawBitmap.getWidth();
-        float sy=getHeight()/(float)drawBitmap.getHeight();
+        float side=cropSideInsetPx();
+        float vertical=cropVerticalInsetPx();
+        float usableW=Math.max(1f,getWidth()-side*2f);
+        float usableH=Math.max(1f,getHeight()-vertical*2f);
+        float sx=usableW/(float)drawBitmap.getWidth();
+        float sy=usableH/(float)drawBitmap.getHeight();
         float s=Math.min(sx,sy);
-        float dx=(getWidth()-drawBitmap.getWidth()*s)/2f;
-        float dy=(getHeight()-drawBitmap.getHeight()*s)/2f;
+        float dx=side+(usableW-drawBitmap.getWidth()*s)/2f;
+        float dy=vertical+(usableH-drawBitmap.getHeight()*s)/2f;
         previewMatrix.reset();
         previewMatrix.postScale(s,s);
         previewMatrix.postTranslate(dx,dy);
@@ -272,6 +298,7 @@ public class DocumentCropView extends View {
 
         if (e.getAction()==MotionEvent.ACTION_DOWN) {
             active=nearestHandle(e.getX(),e.getY());
+            snapActive=false;
             if (active >= 0) {
                 if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
                 dragStartTouchX=touchImageX;
@@ -290,8 +317,13 @@ public class DocumentCropView extends View {
             float dx=(touchImageX-dragStartTouchX)*PRECISION_SCALE;
             float dy=(touchImageY-dragStartTouchY)*PRECISION_SCALE;
 
-            if (active < 4) moveCornerPrecise(active,dx,dy);
-            else moveEdgePrecise(active,dx,dy);
+            if (active < 4) {
+                snapActive=false;
+                moveCornerPrecise(active,dx,dy);
+            } else {
+                moveEdgePrecise(active,dx,dy);
+                snapActive=snapEdgeToDocument(active);
+            }
 
             updateFocusFromActive();
             postInvalidateOnAnimation();
@@ -304,6 +336,7 @@ public class DocumentCropView extends View {
             active=-1;
             dragStartCorners=null;
             showMagnifier=false;
+            snapActive=false;
             postInvalidateOnAnimation();
             return true;
         }
@@ -356,6 +389,126 @@ public class DocumentCropView extends View {
         }
     }
 
+    private void buildSnapEdgeMap(Bitmap source) {
+        snapGradX = null;
+        snapGradY = null;
+        snapW = snapH = 0;
+        if (source == null || source.isRecycled()) return;
+        Bitmap small = null;
+        try {
+            int longest = Math.max(source.getWidth(), source.getHeight());
+            int target = 720;
+            float scale = longest > target ? target / (float)longest : 1f;
+            snapW = Math.max(32, Math.round(source.getWidth() * scale));
+            snapH = Math.max(32, Math.round(source.getHeight() * scale));
+            small = scale < 1f ? Bitmap.createScaledBitmap(source, snapW, snapH, true) : source;
+            int[] px = new int[snapW * snapH];
+            int[] gray = new int[snapW * snapH];
+            small.getPixels(px, 0, snapW, 0, 0, snapW, snapH);
+            for (int i=0;i<px.length;i++) {
+                int color=px[i];
+                gray[i]=(Color.red(color)*30 + Color.green(color)*59 + Color.blue(color)*11)/100;
+            }
+            snapGradX = new int[snapW * snapH];
+            snapGradY = new int[snapW * snapH];
+            for (int y=1;y<snapH-1;y++) {
+                int row=y*snapW;
+                for (int x=1;x<snapW-1;x++) {
+                    int i=row+x;
+                    snapGradX[i]=Math.abs(gray[i+1]-gray[i-1]);
+                    snapGradY[i]=Math.abs(gray[i+snapW]-gray[i-snapW]);
+                }
+            }
+        } catch (Throwable ignored) {
+            snapGradX = null; snapGradY = null; snapW = snapH = 0;
+        } finally {
+            if (small != null && small != source && !small.isRecycled()) small.recycle();
+        }
+    }
+
+    private boolean snapEdgeToDocument(int edge) {
+        if (bitmap == null || snapGradX == null || snapGradY == null || snapW < 8 || snapH < 8) return false;
+        if (edge < 4 || edge > 7) return false;
+        float radius=Math.max(8f, Math.min(bitmap.getWidth(),bitmap.getHeight())*0.022f);
+        float step=Math.max(1f, radius/12f);
+        float base=edgeSnapScore(edge,0f);
+        float bestRaw=base;
+        float bestAdjusted=base;
+        float bestDelta=0f;
+        for (float d=-radius; d<=radius; d+=step) {
+            if (Math.abs(d) < step*0.45f) continue;
+            float raw=edgeSnapScore(edge,d);
+            float adjusted=raw-(Math.abs(d)/radius)*18f;
+            if (adjusted > bestAdjusted) {
+                bestAdjusted=adjusted;
+                bestRaw=raw;
+                bestDelta=d;
+            }
+        }
+        if (bestRaw < 22f) return false;
+        if (Math.abs(bestDelta) >= 0.5f && bestAdjusted > base + 3f) {
+            shiftCurrentEdge(edge,bestDelta);
+            return true;
+        }
+        // Already sitting on a strong edge: show the user that auto-align is active.
+        return base >= 30f;
+    }
+
+    private float edgeSnapScore(int edge, float delta) {
+        PointF a,b;
+        if (edge==4) { a=corners[0]; b=corners[1]; }
+        else if (edge==5) { a=corners[1]; b=corners[2]; }
+        else if (edge==6) { a=corners[3]; b=corners[2]; }
+        else { a=corners[0]; b=corners[3]; }
+        boolean horizontal=(edge==4 || edge==6);
+        int[] grad=horizontal ? snapGradY : snapGradX;
+        float sx=snapW/(float)Math.max(1,bitmap.getWidth());
+        float sy=snapH/(float)Math.max(1,bitmap.getHeight());
+        float sum=0f;
+        int count=0;
+        final int samples=30;
+        for (int i=0;i<samples;i++) {
+            float t=0.08f + (0.84f*i)/(samples-1f);
+            float ox=a.x+(b.x-a.x)*t + (horizontal ? 0f : delta);
+            float oy=a.y+(b.y-a.y)*t + (horizontal ? delta : 0f);
+            int x=Math.round(ox*sx);
+            int y=Math.round(oy*sy);
+            if (x<2 || x>=snapW-2 || y<2 || y>=snapH-2) continue;
+            int idx=y*snapW+x;
+            int v=grad[idx];
+            if (horizontal) v=Math.max(v,Math.max(grad[idx-snapW],grad[idx+snapW]));
+            else v=Math.max(v,Math.max(grad[idx-1],grad[idx+1]));
+            sum+=v;
+            count++;
+        }
+        return count>0 ? sum/count : 0f;
+    }
+
+    private void shiftCurrentEdge(int edge, float delta) {
+        float gap=Math.max(12f,Math.min(bitmap.getWidth(),bitmap.getHeight())*0.025f);
+        if (edge==4) {
+            float min=-Math.min(corners[0].y,corners[1].y);
+            float max=Math.min(corners[3].y-gap-corners[0].y,corners[2].y-gap-corners[1].y);
+            float d=clamp(delta,min,max);
+            corners[0].y+=d; corners[1].y+=d;
+        } else if (edge==6) {
+            float min=Math.max(corners[1].y+gap-corners[2].y,corners[0].y+gap-corners[3].y);
+            float max=bitmap.getHeight()-Math.max(corners[2].y,corners[3].y);
+            float d=clamp(delta,min,max);
+            corners[2].y+=d; corners[3].y+=d;
+        } else if (edge==5) {
+            float min=Math.max(corners[0].x+gap-corners[1].x,corners[3].x+gap-corners[2].x);
+            float max=bitmap.getWidth()-Math.max(corners[1].x,corners[2].x);
+            float d=clamp(delta,min,max);
+            corners[1].x+=d; corners[2].x+=d;
+        } else if (edge==7) {
+            float min=-Math.min(corners[0].x,corners[3].x);
+            float max=Math.min(corners[1].x-gap-corners[0].x,corners[2].x-gap-corners[3].x);
+            float d=clamp(delta,min,max);
+            corners[0].x+=d; corners[3].x+=d;
+        }
+    }
+
     private void updateFocusFromActive() {
         if (active < 0) return;
         if (active < 4) {
@@ -381,7 +534,7 @@ public class DocumentCropView extends View {
     private int nearestHandle(float x,float y) {
         float[] v=mappedCorners();
         int idx=-1;
-        float best=dp(82);
+        float best=dp(110);
 
         for (int i=0;i<4;i++) {
             float d=distance(x,y,v[i*2],v[i*2+1]);
@@ -396,7 +549,7 @@ public class DocumentCropView extends View {
         };
         for (int i=0;i<4;i++) {
             float d=distance(x,y,mids[i].x,mids[i].y);
-            if (d<best && d<dp(68)) { best=d; idx=4+i; }
+            if (d<best && d<dp(92)) { best=d; idx=4+i; }
         }
         return idx;
     }
@@ -406,6 +559,9 @@ public class DocumentCropView extends View {
             previewBitmap.recycle();
         }
         previewBitmap = null;
+        snapGradX = null;
+        snapGradY = null;
+        snapW = snapH = 0;
     }
 
     @Override protected void onDetachedFromWindow() {

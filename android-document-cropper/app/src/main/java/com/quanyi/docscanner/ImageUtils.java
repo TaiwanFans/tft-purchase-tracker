@@ -89,8 +89,26 @@ final class ImageUtils {
         return bmp;
     }
 
+    static Bitmap loadBitmapExact(ContentResolver resolver, Uri uri, int maxDim) throws Exception {
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            android.graphics.ImageDecoder.Source source = android.graphics.ImageDecoder.createSource(resolver, uri);
+            return android.graphics.ImageDecoder.decodeBitmap(source, (decoder, info, src) -> {
+                android.util.Size size = info.getSize();
+                int w = Math.max(1, size.getWidth());
+                int h = Math.max(1, size.getHeight());
+                int longest = Math.max(w, h);
+                if (longest > maxDim) {
+                    float scale = maxDim / (float)longest;
+                    decoder.setTargetSize(Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale)));
+                }
+                decoder.setAllocator(android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE);
+            });
+        }
+        return loadBitmap(resolver, uri, maxDim);
+    }
+
     static PointF[] defaultCorners(Bitmap b) {
-        float mx = b.getWidth() * 0.05f, my = b.getHeight() * 0.05f;
+        float mx = b.getWidth() * 0.025f, my = b.getHeight() * 0.025f;
         return new PointF[]{
                 new PointF(mx, my), new PointF(b.getWidth()-mx, my),
                 new PointF(b.getWidth()-mx, b.getHeight()-my), new PointF(mx, b.getHeight()-my)
@@ -121,15 +139,16 @@ final class ImageUtils {
             Imgproc.cvtColor(rgb, hsv, Imgproc.COLOR_RGB2HSV);
             Imgproc.GaussianBlur(gray, gray, new Size(5,5), 0);
 
-            Imgproc.Canny(gray, edgeReference, 38, 118);
-            Mat edgeKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(3,3));
-            Imgproc.dilate(edgeReference, edgeReference, edgeKernel);
+            Imgproc.Canny(gray, edgeReference, 32, 104);
+            Mat edgeKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5,5));
+            Imgproc.morphologyEx(edgeReference, edgeReference, Imgproc.MORPH_CLOSE, edgeKernel);
             edgeKernel.release();
 
             ArrayList<Candidate> candidates = new ArrayList<>();
 
-            int[][] canny = {{24,72},{36,108},{52,156},{72,216}};
-            for (int[] t : canny) {
+            // Fast stage: enough for normal A4 / invoices / cards.
+            int[][] fastCanny = {{20,60},{38,114},{64,192}};
+            for (int[] t : fastCanny) {
                 Mat edge = new Mat();
                 Imgproc.Canny(gray, edge, t[0], t[1]);
                 Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5,5));
@@ -141,24 +160,16 @@ final class ImageUtils {
 
             Mat adaptive = new Mat();
             Imgproc.adaptiveThreshold(gray, adaptive, 255,
-                    Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 35, 10);
+                    Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 41, 9);
             Mat adaptiveKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(9,9));
             Imgproc.morphologyEx(adaptive, adaptive, Imgproc.MORPH_CLOSE, adaptiveKernel);
             adaptiveKernel.release();
             maps.add(adaptive);
             findQuadCandidates(adaptive, rgba.cols(), rgba.rows(), 1, candidates);
 
-            Mat otsu = new Mat();
-            Imgproc.threshold(gray, otsu, 0, 255, Imgproc.THRESH_BINARY | Imgproc.THRESH_OTSU);
-            Mat otsuKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(17,17));
-            Imgproc.morphologyEx(otsu, otsu, Imgproc.MORPH_CLOSE, otsuKernel);
-            otsuKernel.release();
-            maps.add(otsu);
-            findQuadCandidates(otsu, rgba.cols(), rgba.rows(), 2, candidates);
-
             Mat paperMask = new Mat();
-            Core.inRange(hsv, new Scalar(0, 0, 108), new Scalar(180, 125, 255), paperMask);
-            Mat paperClose = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(23,23));
+            Core.inRange(hsv, new Scalar(0, 0, 92), new Scalar(180, 155, 255), paperMask);
+            Mat paperClose = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(21,21));
             Mat paperOpen = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5,5));
             Imgproc.morphologyEx(paperMask, paperMask, Imgproc.MORPH_CLOSE, paperClose);
             Imgproc.morphologyEx(paperMask, paperMask, Imgproc.MORPH_OPEN, paperOpen);
@@ -168,17 +179,65 @@ final class ImageUtils {
             findQuadCandidates(paperMask, rgba.cols(), rgba.rows(), 3, candidates);
 
             Candidate best = chooseBestCandidate(candidates, gray, hsv, edgeReference, rgba.cols(), rgba.rows());
+            Candidate lineCandidate = detectByDominantLines(edgeReference, gray, hsv, rgba.cols(), rgba.rows());
+            if (lineCandidate != null && (best == null || lineCandidate.score > best.score)) best = lineCandidate;
 
-            if (best == null || best.score < 54.0) {
-                Candidate lineCandidate = detectByDominantLines(edgeReference, gray, hsv, rgba.cols(), rgba.rows());
-                if (lineCandidate != null && (best == null || lineCandidate.score > best.score)) {
-                    best = lineCandidate;
+            // Hard-stage only when confidence is not already strong.
+            if (best == null || best.score < 70.0) {
+                for (int[] t : new int[][]{{12,36},{92,255}}) {
+                    Mat edge = new Mat();
+                    Imgproc.Canny(gray, edge, t[0], t[1]);
+                    Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(7,7));
+                    Imgproc.morphologyEx(edge, edge, Imgproc.MORPH_CLOSE, kernel);
+                    kernel.release();
+                    maps.add(edge);
+                    findQuadCandidates(edge, rgba.cols(), rgba.rows(), 0, candidates);
                 }
+
+                Mat edgeWide = edgeReference.clone();
+                Mat edgeWideKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(11,11));
+                Imgproc.morphologyEx(edgeWide, edgeWide, Imgproc.MORPH_CLOSE, edgeWideKernel);
+                edgeWideKernel.release();
+                maps.add(edgeWide);
+                findQuadCandidates(edgeWide, rgba.cols(), rgba.rows(), 0, candidates);
+
+                Mat adaptive2 = new Mat();
+                Imgproc.adaptiveThreshold(gray, adaptive2, 255,
+                        Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C, Imgproc.THRESH_BINARY_INV, 61, 7);
+                Mat adaptiveKernel2 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(13,13));
+                Imgproc.morphologyEx(adaptive2, adaptive2, Imgproc.MORPH_CLOSE, adaptiveKernel2);
+                adaptiveKernel2.release();
+                maps.add(adaptive2);
+                findQuadCandidates(adaptive2, rgba.cols(), rgba.rows(), 1, candidates);
+
+                Mat otsu = new Mat();
+                Imgproc.threshold(gray, otsu, 0, 255, Imgproc.THRESH_BINARY | Imgproc.THRESH_OTSU);
+                Mat otsuKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(17,17));
+                Imgproc.morphologyEx(otsu, otsu, Imgproc.MORPH_CLOSE, otsuKernel);
+                otsuKernel.release();
+                maps.add(otsu);
+                findQuadCandidates(otsu, rgba.cols(), rgba.rows(), 2, candidates);
+
+                Mat paperShadow = new Mat();
+                Core.inRange(hsv, new Scalar(0, 0, 72), new Scalar(180, 185, 255), paperShadow);
+                Mat shadowClose = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(31,31));
+                Mat shadowOpen = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(7,7));
+                Imgproc.morphologyEx(paperShadow, paperShadow, Imgproc.MORPH_CLOSE, shadowClose);
+                Imgproc.morphologyEx(paperShadow, paperShadow, Imgproc.MORPH_OPEN, shadowOpen);
+                shadowClose.release();
+                shadowOpen.release();
+                maps.add(paperShadow);
+                findQuadCandidates(paperShadow, rgba.cols(), rgba.rows(), 3, candidates);
+
+                Candidate hardBest = chooseBestCandidate(candidates, gray, hsv, edgeReference, rgba.cols(), rgba.rows());
+                if (hardBest != null && (best == null || hardBest.score > best.score)) best = hardBest;
+                lineCandidate = detectByDominantLines(edgeWide, gray, hsv, rgba.cols(), rgba.rows());
+                if (lineCandidate != null && (best == null || lineCandidate.score > best.score)) best = lineCandidate;
             }
 
-            if (best == null || best.score < 39.0) return fallbackDetectDocumentCorners(src);
+            if (best == null || best.score < 34.0) return fallbackDetectDocumentCorners(src);
 
-            Point[] expanded = expandQuad(best.points, rgba.cols(), rgba.rows(), 0.0045);
+            Point[] expanded = expandQuad(best.points, rgba.cols(), rgba.rows(), 0.0035);
             float inv = (float)(1.0 / scale);
             PointF[] result = new PointF[4];
             for (int i=0;i<4;i++) {
@@ -189,7 +248,7 @@ final class ImageUtils {
         } catch (Throwable ignored) {
             return fallbackDetectDocumentCorners(src);
         } finally {
-            for (Mat m : maps) try { m.release(); } catch (Throwable ignored) {}
+            for (Mat mat : maps) try { mat.release(); } catch (Throwable ignored) {}
             try { edgeReference.release(); } catch (Throwable ignored) {}
             try { hsv.release(); } catch (Throwable ignored) {}
             try { gray.release(); } catch (Throwable ignored) {}
@@ -211,7 +270,7 @@ final class ImageUtils {
 
             for (MatOfPoint contour : contours) {
                 double contourArea = Math.abs(Imgproc.contourArea(contour));
-                if (contourArea < imageArea * 0.07 || contourArea > imageArea * 0.992) continue;
+                if (contourArea < imageArea * 0.05 || contourArea > imageArea * 0.9995) continue;
 
                 MatOfPoint2f c2 = new MatOfPoint2f(contour.toArray());
                 try {
@@ -273,7 +332,7 @@ final class ImageUtils {
         double area = polygonArea(p);
         double imageArea = w * (double)h;
         double areaRatio = area / imageArea;
-        if (areaRatio < 0.07 || areaRatio > 0.992) return -1;
+        if (areaRatio < 0.05 || areaRatio > 0.9995) return -1;
 
         double minSide = Math.min(Math.min(distance(p[0],p[1]), distance(p[1],p[2])),
                 Math.min(distance(p[2],p[3]), distance(p[3],p[0])));
@@ -295,7 +354,7 @@ final class ImageUtils {
         double area = polygonArea(p);
         double imageArea = w * (double)h;
         double areaRatio = area / imageArea;
-        if (areaRatio < 0.07 || areaRatio > 0.992) return -1;
+        if (areaRatio < 0.05 || areaRatio > 0.9995) return -1;
 
         double anglePenalty = quadAnglePenalty(p);
         if (anglePenalty > 0.78) return -1;
@@ -362,16 +421,32 @@ final class ImageUtils {
             else if (sourceKind == 1) sourceBonus = 1.2;
             else if (sourceKind == 4) sourceBonus = 2.0;
 
-            return areaScore * 38.0
+            double minX = w, minY = h, maxX = 0, maxY = 0;
+            for (Point q : p) {
+                minX = Math.min(minX, q.x); minY = Math.min(minY, q.y);
+                maxX = Math.max(maxX, q.x); maxY = Math.max(maxY, q.y);
+            }
+            double frameMargin = Math.min(Math.min(minX / Math.max(1.0,w), (w-maxX) / Math.max(1.0,w)),
+                    Math.min(minY / Math.max(1.0,h), (h-maxY) / Math.max(1.0,h)));
+            double nearFramePenalty = 0.0;
+            if (areaRatio > 0.86 && frameMargin < 0.018) {
+                nearFramePenalty = (1.0 - clamp01(edgeSupport / 0.28)) * 16.0
+                        + (1.0 - contrastScore) * 8.0;
+            }
+            double extremeAreaPenalty = areaRatio > 0.94 ? clamp01((areaRatio - 0.94) / 0.06) * 6.0 : 0.0;
+
+            return areaScore * 30.0
                     + angleScore * 15.0
-                    + rectScore * 7.0
-                    + aspectScore * 6.0
+                    + rectScore * 8.0
+                    + aspectScore * 7.0
                     + centerScore * 4.0
-                    + edgeSupport * 17.0
-                    + paperBrightness * 4.0
+                    + edgeSupport * 19.0
+                    + paperBrightness * 5.0
                     + paperLowSaturation * 4.0
-                    + contrastScore * 5.0
-                    + sourceBonus;
+                    + contrastScore * 10.0
+                    + sourceBonus
+                    - nearFramePenalty
+                    - extremeAreaPenalty;
         } finally {
             polygon.release();
             mask.release();
@@ -586,26 +661,49 @@ final class ImageUtils {
     }
 
     static Bitmap perspectiveCrop(Bitmap src, PointF[] p) {
+        return perspectiveCrop(src, p, 4096);
+    }
+
+    static Bitmap perspectiveCrop(Bitmap src, PointF[] p, int maxOutputDim) {
         float top=dist(p[0],p[1]), bottom=dist(p[3],p[2]);
         float left=dist(p[0],p[3]), right=dist(p[1],p[2]);
         int ow=Math.max(64, Math.round((top+bottom)/2f));
         int oh=Math.max(64, Math.round((left+right)/2f));
-        float limit=4096f/Math.max(ow,oh);
-        if(limit<1f){ow=Math.round(ow*limit);oh=Math.round(oh*limit);}
+        int safeMax = Math.max(1024, maxOutputDim);
+        float limit=safeMax/(float)Math.max(ow,oh);
+        if(limit<1f){ow=Math.max(64,Math.round(ow*limit));oh=Math.max(64,Math.round(oh*limit));}
         Bitmap out=Bitmap.createBitmap(ow,oh,Bitmap.Config.ARGB_8888);
         Canvas c=new Canvas(out);
         c.drawColor(Color.WHITE);
         float[] s={p[0].x,p[0].y,p[1].x,p[1].y,p[2].x,p[2].y,p[3].x,p[3].y};
         float[] d={0,0,ow,0,ow,oh,0,oh};
-        Matrix m=new Matrix();
-        if(!m.setPolyToPoly(s,0,d,0,4)) return src.copy(Bitmap.Config.ARGB_8888,false);
-        Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG);
-        c.drawBitmap(src,m,paint);
+        Matrix matrix=new Matrix();
+        if(!matrix.setPolyToPoly(s,0,d,0,4)) {
+            out.recycle();
+            return src.copy(Bitmap.Config.ARGB_8888,false);
+        }
+        Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG|Paint.FILTER_BITMAP_FLAG|Paint.DITHER_FLAG);
+        c.drawBitmap(src,matrix,paint);
         return out;
+    }
+
+    static Bitmap clearDocument(Bitmap input) { return enhance(input, true, true, false); }
+    static Bitmap softWhiteDocument(Bitmap input) { return enhance(input, true, false, false); }
+    static Bitmap blackWhiteScan(Bitmap input) { return enhance(input, true, true, true); }
+    static Bitmap textSharp(Bitmap input) { return enhance(input, false, true, false); }
+    static Bitmap naturalGray(Bitmap input) { return enhance(input, false, false, true); }
+    static Bitmap grayClear(Bitmap input) { return enhance(input, false, true, true); }
+    static Bitmap enhancedSharpen(Bitmap input) {
+        if (input == null || input.isRecycled()) return input;
+        if (ensureOpenCv()) {
+            try { return enhanceStrongSharpOpenCv(input); } catch (Throwable ignored) {}
+        }
+        return fallbackStrongSharp(input);
     }
 
     static Bitmap enhance(Bitmap input, boolean brighter, boolean sharper) {
         if (input == null || input.isRecycled()) return input;
+        if (!brighter && !sharper) return input.copy(Bitmap.Config.ARGB_8888, false);
         if (ensureOpenCv()) {
             try {
                 return enhanceOpenCv(input, brighter, sharper);
@@ -614,52 +712,104 @@ final class ImageUtils {
         return fallbackEnhance(input, brighter, sharper);
     }
 
+    static Bitmap enhance(Bitmap input, boolean brighter, boolean sharper, boolean monochrome) {
+        if (input == null || input.isRecycled()) return input;
+
+        // Unused boolean combination from previous presets becomes a dedicated
+        // strong COLOR sharpen mode. It is handled before monochrome conversion.
+        boolean enhancedSharpen = brighter && !sharper && monochrome;
+        if (enhancedSharpen) {
+            if (ensureOpenCv()) {
+                try { return enhanceStrongSharpOpenCv(input); } catch (Throwable ignored) {}
+            }
+            return fallbackStrongSharp(input);
+        }
+
+        Bitmap out = enhance(input, brighter, sharper);
+        if (!monochrome || out == null || out.isRecycled()) return out;
+        if (ensureOpenCv()) {
+            Mat rgba = new Mat();
+            Mat gray = new Mat();
+            Mat temp = new Mat();
+            Mat processed = new Mat();
+            try {
+                Utils.bitmapToMat(out, rgba);
+                Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
+
+                if (brighter && sharper) {
+                    // B&W scan: local contrast first, then adaptive threshold so
+                    // uneven lighting does not wash out small Chinese text.
+                    CLAHE clahe = Imgproc.createCLAHE(1.75, new Size(8,8));
+                    clahe.apply(gray, temp);
+                    int block = Math.max(25, Math.min(71, (Math.min(out.getWidth(), out.getHeight()) / 30) | 1));
+                    Imgproc.adaptiveThreshold(temp, processed, 255, Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+                            Imgproc.THRESH_BINARY, block, 11);
+                    clahe.collectGarbage();
+                } else {
+                    // Natural Gray / Gray Clear.
+                    CLAHE clahe = Imgproc.createCLAHE(sharper ? 2.0 : 1.45, new Size(8,8));
+                    clahe.apply(gray, processed);
+                    clahe.collectGarbage();
+                    if (sharper) unsharpLuminance(processed, 0.48, 0.72, 4.0);
+                }
+
+                Imgproc.cvtColor(processed, rgba, Imgproc.COLOR_GRAY2RGBA);
+                Utils.matToBitmap(rgba, out);
+                return out;
+            } catch (Throwable ignored) {
+            } finally {
+                processed.release();
+                temp.release();
+                gray.release();
+                rgba.release();
+            }
+        }
+
+        // Basic non-OpenCV gray fallback.
+        try {
+            int w=out.getWidth(), h=out.getHeight();
+            int[] px=new int[w*h];
+            out.getPixels(px,0,w,0,0,w,h);
+            for (int i=0;i<px.length;i++) {
+                int c=px[i];
+                int y=(Color.red(c)*30+Color.green(c)*59+Color.blue(c)*11)/100;
+                px[i]=Color.argb(Color.alpha(c),y,y,y);
+            }
+            out.setPixels(px,0,w,0,0,w,h);
+        } catch (Throwable ignored) {}
+        return out;
+    }
+
     private static Bitmap enhanceOpenCv(Bitmap input, boolean brighter, boolean sharper) {
         Mat src = new Mat();
         Mat rgb = new Mat();
+        Mat lab = new Mat();
+        List<Mat> channels = new ArrayList<>();
         try {
             Utils.bitmapToMat(input, src);
             Imgproc.cvtColor(src, rgb, Imgproc.COLOR_RGBA2RGB);
+            Imgproc.cvtColor(rgb, lab, Imgproc.COLOR_RGB2Lab);
+            Core.split(lab, channels);
+            Mat l = channels.get(0);
 
             if (brighter) {
-                Mat background = new Mat();
-                Mat normalized = new Mat();
-                Mat lab = new Mat();
-                List<Mat> channels = new ArrayList<>();
-                try {
-                    double sigma = Math.max(10.0, Math.max(input.getWidth(), input.getHeight()) / 28.0);
-                    Imgproc.GaussianBlur(rgb, background, new Size(0,0), sigma);
-                    Core.add(background, Scalar.all(1.0), background);
-                    Core.divide(rgb, background, normalized, 245.0);
-                    normalized.convertTo(rgb, -1, 1.28, -50.0);
-
-                    Imgproc.cvtColor(rgb, lab, Imgproc.COLOR_RGB2Lab);
-                    Core.split(lab, channels);
-                    CLAHE clahe = Imgproc.createCLAHE(2.0, new Size(8,8));
-                    Mat enhancedL = new Mat();
-                    clahe.apply(channels.get(0), enhancedL);
-                    channels.get(0).release();
-                    channels.set(0, enhancedL);
-                    Core.merge(channels, lab);
-                    Imgproc.cvtColor(lab, rgb, Imgproc.COLOR_Lab2RGB);
-                } finally {
-                    for (Mat c : channels) try { c.release(); } catch (Throwable ignored) {}
-                    try { lab.release(); } catch (Throwable ignored) {}
-                    try { normalized.release(); } catch (Throwable ignored) {}
-                    try { background.release(); } catch (Throwable ignored) {}
-                }
+                normalizeIllumination(l);
+                applyClahe(l, 1.70);
+            } else if (sharper) {
+                // Text-sharp mode: improve local luminance contrast without
+                // whitening colored stamps/signatures.
+                applyClahe(l, 1.45);
+                emphasizeDarkText(l, 0.24);
             }
 
             if (sharper) {
-                Mat blur = new Mat();
-                try {
-                    Imgproc.GaussianBlur(rgb, blur, new Size(0,0), 0.9);
-                    Core.addWeighted(rgb, 1.55, blur, -0.55, 0, rgb);
-                } finally {
-                    blur.release();
-                }
+                // Mild scanner sharpening for Clear / Text Sharp. Thresholding
+                // avoids sharpening flat paper noise and reduces bright halos.
+                unsharpLuminance(l, brighter ? 0.36 : 0.52, 0.72, 4.0);
             }
 
+            Core.merge(channels, lab);
+            Imgproc.cvtColor(lab, rgb, Imgproc.COLOR_Lab2RGB);
             Mat outRgba = new Mat();
             try {
                 Imgproc.cvtColor(rgb, outRgba, Imgproc.COLOR_RGB2RGBA);
@@ -670,9 +820,126 @@ final class ImageUtils {
                 outRgba.release();
             }
         } finally {
+            for (Mat ch : channels) try { ch.release(); } catch (Throwable ignored) {}
+            lab.release();
             rgb.release();
             src.release();
         }
+    }
+
+    private static Bitmap enhanceStrongSharpOpenCv(Bitmap input) {
+        Mat src = new Mat();
+        Mat rgb = new Mat();
+        Mat lab = new Mat();
+        List<Mat> channels = new ArrayList<>();
+        try {
+            Utils.bitmapToMat(input, src);
+            Imgproc.cvtColor(src, rgb, Imgproc.COLOR_RGBA2RGB);
+            Imgproc.cvtColor(rgb, lab, Imgproc.COLOR_RGB2Lab);
+            Core.split(lab, channels);
+            Mat l = channels.get(0);
+
+            // Strong mode still changes only luminance: blue/red stamps keep hue.
+            normalizeIllumination(l);
+            applyClahe(l, 2.05);
+            emphasizeDarkText(l, 0.30);
+            unsharpLuminance(l, 0.72, 0.68, 5.0);
+
+            Core.merge(channels, lab);
+            Imgproc.cvtColor(lab, rgb, Imgproc.COLOR_Lab2RGB);
+            Mat outRgba = new Mat();
+            try {
+                Imgproc.cvtColor(rgb, outRgba, Imgproc.COLOR_RGB2RGBA);
+                Bitmap out = Bitmap.createBitmap(input.getWidth(), input.getHeight(), Bitmap.Config.ARGB_8888);
+                Utils.matToBitmap(outRgba, out);
+                return out;
+            } finally {
+                outRgba.release();
+            }
+        } finally {
+            for (Mat ch : channels) try { ch.release(); } catch (Throwable ignored) {}
+            lab.release();
+            rgb.release();
+            src.release();
+        }
+    }
+
+    private static void normalizeIllumination(Mat l) {
+        Mat small = new Mat();
+        Mat backgroundSmall = new Mat();
+        Mat background = new Mat();
+        Mat normalized = new Mat();
+        try {
+            int longest = Math.max(l.cols(), l.rows());
+            double scale = longest > 760 ? 760.0 / longest : 1.0;
+            if (scale < 0.999) Imgproc.resize(l, small, new Size(), scale, scale, Imgproc.INTER_AREA);
+            else l.copyTo(small);
+
+            int shortSide = Math.max(1, Math.min(small.cols(), small.rows()));
+            int k = Math.max(31, Math.min(91, (shortSide / 11) | 1));
+            if ((k & 1) == 0) k++;
+            Imgproc.blur(small, backgroundSmall, new Size(k,k));
+            Imgproc.resize(backgroundSmall, background, l.size(), 0, 0, Imgproc.INTER_LINEAR);
+            Core.add(background, Scalar.all(1.0), background);
+            Core.divide(l, background, normalized, 238.0);
+            normalized.convertTo(l, CvType.CV_8U);
+        } finally {
+            normalized.release();
+            background.release();
+            backgroundSmall.release();
+            small.release();
+        }
+    }
+
+    private static void applyClahe(Mat l, double clipLimit) {
+        CLAHE clahe = Imgproc.createCLAHE(clipLimit, new Size(8,8));
+        Mat out = new Mat();
+        try {
+            clahe.apply(l, out);
+            out.copyTo(l);
+        } finally {
+            out.release();
+            clahe.collectGarbage();
+        }
+    }
+
+    private static void emphasizeDarkText(Mat l, double weight) {
+        Mat blackHat = new Mat();
+        Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(7,7));
+        try {
+            Imgproc.morphologyEx(l, blackHat, Imgproc.MORPH_BLACKHAT, kernel);
+            Core.addWeighted(l, 1.0, blackHat, -weight, 0, l);
+        } finally {
+            kernel.release();
+            blackHat.release();
+        }
+    }
+
+    private static void unsharpLuminance(Mat l, double amount, double sigma, double edgeThreshold) {
+        Mat blur = new Mat();
+        Mat sharpened = new Mat();
+        Mat detail = new Mat();
+        Mat mask = new Mat();
+        try {
+            Imgproc.GaussianBlur(l, blur, new Size(0,0), sigma);
+            Core.addWeighted(l, 1.0 + amount, blur, -amount, 0, sharpened);
+            Core.absdiff(l, blur, detail);
+            Imgproc.threshold(detail, mask, edgeThreshold, 255, Imgproc.THRESH_BINARY);
+            sharpened.copyTo(l, mask);
+        } finally {
+            mask.release();
+            detail.release();
+            sharpened.release();
+            blur.release();
+        }
+    }
+
+    private static Bitmap fallbackStrongSharp(Bitmap input) {
+        Bitmap first = fallbackEnhance(input, false, true);
+        if (first == null || first.isRecycled()) return first;
+        Bitmap second = fallbackEnhance(first, false, true);
+        if (second != first && !first.isRecycled()) first.recycle();
+        return second;
     }
 
     private static Bitmap fallbackEnhance(Bitmap input, boolean brighter, boolean sharper) {
