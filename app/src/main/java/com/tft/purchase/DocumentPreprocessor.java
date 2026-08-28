@@ -27,12 +27,9 @@ import java.util.UUID;
 
 /**
  * Purchase-order document preparation for OCR/VLM.
- *
- * The original photo is never modified. We create two temporary files:
- *  - visionPath: orientation/perspective corrected colour image for MiniCPM.
- *  - ocrPath: corrected grayscale + local contrast + mild sharpening for OCR engines.
- *
- * All OpenCV operations are best-effort; if contour detection fails we keep the corrected image.
+ * Original photos are never overwritten. The pipeline creates:
+ *  - visionPath: EXIF/orientation + conservative perspective-corrected colour copy.
+ *  - ocrPath: high-resolution grayscale, shadow-normalized, denoised, contrast/sharpened copy.
  */
 public final class DocumentPreprocessor {
     private DocumentPreprocessor() {}
@@ -67,13 +64,14 @@ public final class DocumentPreprocessor {
                     corrected = warped;
                 }
             } catch (Throwable ignored) {
-                // Keep orientation-corrected source if automatic boundary detection is uncertain.
+                // Conservative fallback: never destroy a usable source because edge detection is uncertain.
             }
         }
 
-        corrected = resizeForDocument(corrected, 3000, 2100);
+        // Keep materially more glyph pixels than the previous 3000px cap. Tiles are cropped after this step.
+        corrected = resizeForDocument(corrected, 3600, 2700);
         File vision = new File(context.getCacheDir(), "doc_vision_" + UUID.randomUUID() + ".jpg");
-        saveJpeg(corrected, vision, 97);
+        saveJpeg(corrected, vision, 98);
 
         Bitmap ocrBitmap = corrected;
         if (openCvReady) {
@@ -83,7 +81,7 @@ public final class DocumentPreprocessor {
             } catch (Throwable ignored) {}
         }
         File ocr = new File(context.getCacheDir(), "doc_ocr_" + UUID.randomUUID() + ".jpg");
-        saveJpeg(ocrBitmap, ocr, 98);
+        saveJpeg(ocrBitmap, ocr, 100);
 
         if (ocrBitmap != corrected && !ocrBitmap.isRecycled()) ocrBitmap.recycle();
         if (!corrected.isRecycled()) corrected.recycle();
@@ -97,7 +95,7 @@ public final class DocumentPreprocessor {
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw new Exception("圖片尺寸無效");
 
         int sample = 1;
-        while (bounds.outWidth / sample > 3600 || bounds.outHeight / sample > 4600) sample *= 2;
+        while (bounds.outWidth / sample > 4300 || bounds.outHeight / sample > 5600) sample *= 2;
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inSampleSize = sample;
         options.inPreferredConfig = Bitmap.Config.ARGB_8888;
@@ -114,7 +112,6 @@ public final class DocumentPreprocessor {
         } catch (Throwable ignored) {}
         if (degrees != 0) bm = rotateAndRecycle(bm, degrees);
 
-        // Company purchase orders are portrait documents. Only force rotation when clearly landscape.
         if (bm.getWidth() > bm.getHeight() * 1.08f) bm = rotateAndRecycle(bm, 90);
         return bm;
     }
@@ -157,7 +154,9 @@ public final class DocumentPreprocessor {
         Mat edges = new Mat();
         Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
         Imgproc.GaussianBlur(gray, blur, new Size(5, 5), 0);
-        Imgproc.Canny(blur, edges, 55, 155);
+        Imgproc.Canny(blur, edges, 45, 145);
+        Mat kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(5, 5));
+        Imgproc.morphologyEx(edges, edges, Imgproc.MORPH_CLOSE, kernel);
         Imgproc.dilate(edges, edges, Imgproc.getStructuringElement(Imgproc.MORPH_RECT, new Size(3, 3)));
 
         List<MatOfPoint> contours = new ArrayList<>();
@@ -169,11 +168,11 @@ public final class DocumentPreprocessor {
         double bestArea = 0;
         for (MatOfPoint contour : contours) {
             double area = Math.abs(Imgproc.contourArea(contour));
-            if (area < imageArea * 0.30 || area <= bestArea) continue;
+            if (area < imageArea * 0.28 || area <= bestArea) continue;
             MatOfPoint2f c2 = new MatOfPoint2f(contour.toArray());
             double peri = Imgproc.arcLength(c2, true);
             MatOfPoint2f approx = new MatOfPoint2f();
-            Imgproc.approxPolyDP(c2, approx, 0.02 * peri, true);
+            Imgproc.approxPolyDP(c2, approx, 0.018 * peri, true);
             Point[] pts = approx.toArray();
             if (pts.length == 4 && Imgproc.isContourConvex(new MatOfPoint(pts))) {
                 best = pts;
@@ -181,7 +180,7 @@ public final class DocumentPreprocessor {
             }
             c2.release(); approx.release(); contour.release();
         }
-        gray.release(); blur.release(); edges.release(); hierarchy.release();
+        gray.release(); blur.release(); edges.release(); hierarchy.release(); kernel.release();
         if (best == null) { rgba.release(); return null; }
 
         Point[] p = orderCorners(best);
@@ -193,9 +192,9 @@ public final class DocumentPreprocessor {
         int height = (int)Math.round(Math.max(heightLeft, heightRight));
         if (width < 600 || height < 800) { rgba.release(); return null; }
 
-        // Avoid wild contour mistakes. Normal A4-ish purchase documents should remain portrait-ish.
         double ratio = width / (double) height;
         if (ratio < 0.45 || ratio > 1.25) { rgba.release(); return null; }
+        if (bestArea < imageArea * 0.32) { rgba.release(); return null; }
 
         MatOfPoint2f srcPts = new MatOfPoint2f(p);
         MatOfPoint2f dstPts = new MatOfPoint2f(
@@ -231,21 +230,33 @@ public final class DocumentPreprocessor {
         Mat gray = new Mat();
         Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY);
 
-        CLAHE clahe = Imgproc.createCLAHE(2.0, new Size(8, 8));
+        // Shadow/background normalization: divide the page by a heavily blurred illumination field.
+        // This retains printed strokes while reducing phone/camera shadows and uneven lighting.
+        Mat background = new Mat();
+        Imgproc.GaussianBlur(gray, background, new Size(0, 0), 18.0);
+        Mat normalized = new Mat();
+        Core.divide(gray, background, normalized, 255.0);
+
+        CLAHE clahe = Imgproc.createCLAHE(1.8, new Size(8, 8));
         Mat contrast = new Mat();
-        clahe.apply(gray, contrast);
+        clahe.apply(normalized, contrast);
+
+        // Edge-preserving light denoise before sharpening; avoids turning JPEG noise into fake strokes.
+        Mat denoised = new Mat();
+        Imgproc.bilateralFilter(contrast, denoised, 5, 32, 32);
 
         Mat soft = new Mat();
-        Imgproc.GaussianBlur(contrast, soft, new Size(0, 0), 1.0);
+        Imgproc.GaussianBlur(denoised, soft, new Size(0, 0), 0.9);
         Mat sharp = new Mat();
-        Core.addWeighted(contrast, 1.35, soft, -0.35, 0, sharp);
+        Core.addWeighted(denoised, 1.30, soft, -0.30, 0, sharp);
 
         Mat outRgba = new Mat();
         Imgproc.cvtColor(sharp, outRgba, Imgproc.COLOR_GRAY2RGBA);
         Bitmap out = Bitmap.createBitmap(source.getWidth(), source.getHeight(), Bitmap.Config.ARGB_8888);
         Utils.matToBitmap(outRgba, out);
 
-        rgba.release(); gray.release(); contrast.release(); soft.release(); sharp.release(); outRgba.release();
+        rgba.release(); gray.release(); background.release(); normalized.release(); contrast.release();
+        denoised.release(); soft.release(); sharp.release(); outRgba.release();
         return out;
     }
 
