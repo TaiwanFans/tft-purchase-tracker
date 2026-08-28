@@ -16,62 +16,67 @@ public final class AiJsonParser {
     public static PurchaseOcrParser.ParsedPurchase parse(String response, String ocrEvidence) {
         PurchaseOcrParser.ParsedPurchase out = new PurchaseOcrParser.ParsedPurchase();
         StringBuilder raw = new StringBuilder();
-        raw.append("[AI_PIPELINE:v2.0.19 PP-OCRv6 Small tiled + ML Kit + OpenCV table-grid + local MiniCPM verifier]\n");
+        raw.append("[AI_PIPELINE:v2.0.20 fixed purchase-order template + PP-OCRv6 Small + ML Kit + OpenCV 8-column grid + local MiniCPM verifier]\n");
         if (ocrEvidence != null && !ocrEvidence.trim().isEmpty()) {
             String o = ocrEvidence.trim();
-            if (o.length() > 22000) o = o.substring(0, 22000);
+            if (o.length() > 28000) o = o.substring(0, 28000);
             raw.append("[OCR_EVIDENCE]\n").append(o).append("\n[/OCR_EVIDENCE]\n");
         }
         raw.append("[MODEL_JSON]\n").append(response == null ? "" : response);
         out.rawText = raw.toString();
 
         JSONObject root = parseObject(response);
-        if (root == null) return out;
+        if (root != null) {
+            out.vendor = clean(root.optString("vendor", ""));
+            out.location = clean(root.optString("location", ""));
+            out.orderNo = normalizeOrderNo(root.optString("order_no", ""));
+            out.purchaseDate = normalizeDate(root.optString("purchase_date", ""));
 
-        out.vendor = clean(root.optString("vendor", ""));
-        out.location = clean(root.optString("location", ""));
-        out.orderNo = normalizeOrderNo(root.optString("order_no", ""));
-        out.purchaseDate = normalizeDate(root.optString("purchase_date", ""));
+            StringBuilder confirm = new StringBuilder();
+            appendConfirm(confirm, root.optJSONArray("needs_confirmation"), "");
 
-        StringBuilder confirm = new StringBuilder();
-        appendConfirm(confirm, root.optJSONArray("needs_confirmation"), "");
+            JSONArray arr = root.optJSONArray("items");
+            if (arr != null) {
+                Set<String> seen = new HashSet<>();
+                for (int n = 0; n < arr.length() && out.items.size() < 50; n++) {
+                    JSONObject j = arr.optJSONObject(n);
+                    if (j == null) continue;
 
-        JSONArray arr = root.optJSONArray("items");
-        if (arr != null) {
-            Set<String> seen = new HashSet<>();
-            for (int n = 0; n < arr.length() && out.items.size() < 50; n++) {
-                JSONObject j = arr.optJSONObject(n);
-                if (j == null) continue;
+                    PurchaseDbHelper.PurchaseItem item = new PurchaseDbHelper.PurchaseItem();
+                    item.lineNo = normalizeLineNo(j.optString("line_no", ""));
+                    item.description = clean(j.optString("description", ""));
+                    item.specification = clean(j.optString("specification", ""));
+                    item.quantity = normalizeNumberText(j.optString("quantity", ""));
+                    item.unit = clean(j.optString("unit", ""));
+                    item.unitPrice = normalizeNumberText(j.optString("unit_price", ""));
+                    item.subtotal = normalizeNumberText(j.optString("subtotal", ""));
+                    item.deliveryDate = normalizeDate(j.optString("delivery_date", ""));
+                    item.note = clean(j.optString("note", ""));
 
-                PurchaseDbHelper.PurchaseItem item = new PurchaseDbHelper.PurchaseItem();
-                item.lineNo = normalizeLineNo(j.optString("line_no", ""));
-                item.description = clean(j.optString("description", ""));
-                item.specification = clean(j.optString("specification", ""));
-                item.quantity = normalizeNumberText(j.optString("quantity", ""));
-                item.unit = clean(j.optString("unit", ""));
-                item.unitPrice = normalizeNumberText(j.optString("unit_price", ""));
-                item.subtotal = normalizeNumberText(j.optString("subtotal", ""));
-                item.deliveryDate = normalizeDate(j.optString("delivery_date", ""));
-                item.note = clean(j.optString("note", ""));
+                    if (!isRealRow(item)) continue;
+                    if (!item.lineNo.isEmpty() && !seen.add(item.lineNo)) continue;
+                    if (item.description.isEmpty() && !item.specification.isEmpty()) {
+                        if (item.note.isEmpty()) item.note = "品名待確認；規格已有影像/OCR證據";
+                    }
 
-                if (!isRealRow(item)) continue;
-                if (!item.lineNo.isEmpty() && !seen.add(item.lineNo)) continue;
-                if (item.description.isEmpty() && !item.specification.isEmpty()) {
-                    if (item.note.isEmpty()) item.note = "品名待確認；規格已有影像/OCR證據";
+                    JSONArray itemConfirm = j.optJSONArray("needs_confirmation");
+                    if (itemConfirm != null && itemConfirm.length() > 0) {
+                        String prefix = item.lineNo.isEmpty() ? "品項" : "品項" + item.lineNo;
+                        appendConfirm(confirm, itemConfirm, prefix + "：");
+                        if (item.note.isEmpty()) item.note = "需要人工確認";
+                        else if (!item.note.contains("需要人工確認")) item.note += "｜需要人工確認";
+                    }
+                    out.items.add(item);
                 }
-
-                JSONArray itemConfirm = j.optJSONArray("needs_confirmation");
-                if (itemConfirm != null && itemConfirm.length() > 0) {
-                    String prefix = item.lineNo.isEmpty() ? "品項" : "品項" + item.lineNo;
-                    appendConfirm(confirm, itemConfirm, prefix + "：");
-                    if (item.note.isEmpty()) item.note = "需要人工確認";
-                    else if (!item.note.contains("需要人工確認")) item.note += "｜需要人工確認";
-                }
-                out.items.add(item);
             }
+            if (confirm.length() > 0) out.rawText += "\n[NEEDS_CONFIRMATION_FIELDS]\n" + confirm;
         }
 
-        if (confirm.length() > 0) out.rawText += "\n[NEEDS_CONFIRMATION_FIELDS]\n" + confirm;
+        // v2.0.20: the user confirmed every uploaded document uses this fixed purchase-order form.
+        // When the 8-column template is confidently matched, deterministic cell evidence outranks MiniCPM.
+        // This also works if the model returned invalid JSON: fixed-grid OCR can still build the purchase record.
+        try { FixedPurchaseOrderTemplateParser.apply(out, ocrEvidence); } catch (Throwable ignored) {}
+
         try {
             if (TftApplication.appContext() != null) {
                 new RecognitionKnowledgeDb(TftApplication.appContext()).applyKnownRules(out, ocrEvidence);
@@ -106,7 +111,8 @@ public final class AiJsonParser {
                 "注意事項", "出貨說明", "回傳說明", "簽章", "公司機密", "禁止外洩", "禁止外泄",
                 "24小時內回傳", "收到本採購單後", "彰化地方法院", "審核", "主管", "經辦人", "廠商確認",
                 "三相與單相同價", "原物料持續調漲", "訂貨交貨及付款方式", "以上報價為", "不含安裝",
-                "若有任何疑問", "業務聯絡", "進口產品", "每批購買數量越多"
+                "若有任何疑問", "業務聯絡", "進口產品", "每批購買數量越多",
+                "前單取消", "以此單為準", "數量修改", "已備好電線", "請報價"
         };
         for (String s : banned) if (d.contains(compact(s))) return false;
         if (!item.lineNo.isEmpty() && !item.lineNo.matches("\\d{3,4}")) return false;
