@@ -2,22 +2,64 @@ package com.tft.purchase;
 
 import org.junit.Test;
 
+import java.util.Arrays;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-/**
- * Regression guards derived from the real 2026-08-13 quotation supplied by the user.
- * These tests intentionally lock down the failure modes observed in v2.0.18.
- */
+/** Regression guards derived from real documents supplied by the user. */
 public class GoldenRegressionTest {
 
     @Test
     public void ownCompanyLegalNameMustNeverBecomeCounterparty() {
         assertTrue(AiResultValidator.isSelfCompany("全益畜牧器具有限公司"));
         assertTrue(AiResultValidator.isSelfCompany("全益畜牧器具公司"));
-        assertTrue(AiResultValidator.isSelfCompany("全益畜牧器具有限公司 報價單"));
-        assertFalse(AiResultValidator.isSelfCompany("君誠環保顧問有限公司"));
+        assertTrue(AiResultValidator.isSelfCompany("全益畜牧器具有限公司 採購單"));
+        assertTrue(AiResultValidator.isSelfCompany("台灣電扇科技有限公司"));
+        assertFalse(AiResultValidator.isSelfCompany("強盛企業社(強發金屬有限公司)"));
+    }
+
+    @Test
+    public void fixedPurchaseFormSelectsExactlyEightSemanticColumns() {
+        // Representative real scan has an extra far-right page edge after the actual table border.
+        TableGridDetector.CanonicalColumns c = TableGridDetector.canonicalizePurchaseColumns(Arrays.asList(
+                0.035f, 0.066f, 0.464f, 0.534f, 0.574f, 0.635f, 0.731f, 0.846f, 0.963f, 0.996f));
+        assertTrue(c.matched);
+        assertEquals(9, c.lines.size());
+        assertEquals(0.035f, c.lines.get(0), 0.002f);
+        assertEquals(0.963f, c.lines.get(8), 0.002f);
+    }
+
+    @Test
+    public void fixedTemplateMustOverrideAiCrossColumnGuess() {
+        PurchaseOcrParser.ParsedPurchase p = basePurchase();
+        p.vendor = "台灣電扇科技有限公司"; // deliberately wrong model guess
+        PurchaseDbHelper.PurchaseItem bad = new PurchaseDbHelper.PurchaseItem();
+        bad.lineNo = "001";
+        bad.description = "36吋風葉";
+        bad.quantity = "304"; // unit price leaked into quantity
+        bad.unitPrice = "20";
+        bad.deliveryDate = "2026-04-23";
+        p.items.add(bad);
+
+        String ev = "[FIXED_PURCHASE_ORDER_V220]\n" +
+                "matched=true confidence=0.960 formula=test\n" +
+                "FIXED_HEADER\tvendor=強盛企業社(強發金屬有限公司) (CB006)\tlocation=彰化縣福興鄉三和村南興街93-36號\torder_no=202604230001\tpurchase_date=2026-04-23\n" +
+                "FIXED_ROW\tline_no=001\tdescription=36吋耐隆纖維三葉風葉（紅葉紅盤，16芯，60型）\tquantity=20\tunit=片\tunit_price=304\tsubtotal=6080\tdelivery_date=2026-04-28\tnote=配件已備好\n" +
+                "FIXED_ROW\tline_no=002\tdescription=以下空白\tquantity=1\tunit=式\tunit_price=0\tsubtotal=\tdelivery_date=2026-04-28\tnote=\n" +
+                "[/FIXED_PURCHASE_ORDER_V220]";
+
+        assertTrue(FixedPurchaseOrderTemplateParser.apply(p, ev));
+        assertEquals("強盛企業社(強發金屬有限公司) (CB006)", p.vendor);
+        assertEquals("202604230001", p.orderNo);
+        assertEquals("2026-04-23", p.purchaseDate);
+        assertEquals(1, p.items.size());
+        assertEquals("001", p.items.get(0).lineNo);
+        assertEquals("20", p.items.get(0).quantity);
+        assertEquals("304", p.items.get(0).unitPrice);
+        assertEquals("6080", p.items.get(0).subtotal);
+        assertEquals("2026-04-28", p.items.get(0).deliveryDate);
     }
 
     @Test
