@@ -15,6 +15,7 @@ import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -37,32 +38,77 @@ public class GemmaSetupActivity extends Activity {
     @Override protected void onPause(){handler.removeCallbacks(refreshLoop);super.onPause();}
 
     private void render() {
-        LinearLayout root=new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(22),dp(26),dp(22),dp(28)); root.setBackgroundColor(Color.rgb(245,248,255));
-        LinearLayout titleRow=new LinearLayout(this);titleRow.setOrientation(LinearLayout.HORIZONTAL);titleRow.setGravity(Gravity.CENTER_VERTICAL);
-        ImageView icon=new ImageView(this);icon.setImageResource(R.drawable.ic_app_icon);titleRow.addView(icon,new LinearLayout.LayoutParams(dp(72),dp(72)));
-        LinearLayout tt=new LinearLayout(this);tt.setOrientation(LinearLayout.VERTICAL);tt.setPadding(dp(12),0,0,0);
-        tt.addView(label("全益採購追蹤",27,Color.rgb(15,42,92),true));
-        tt.addView(label("PP-OCRv6 Small ONNX 分區放大 + MiniCPM｜離線辨識",14,Color.rgb(37,99,235),true));
-        titleRow.addView(tt,new LinearLayout.LayoutParams(0,-2,1));root.addView(titleRow);
+        LinearLayout root=new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(18),dp(18),dp(18),dp(16));
+        root.setBackgroundColor(Color.rgb(245,248,255));
 
-        LinearLayout card=new LinearLayout(this);card.setOrientation(LinearLayout.VERTICAL);card.setPadding(dp(16),dp(16),dp(16),dp(16));card.setBackground(box(Color.WHITE,Color.rgb(37,99,235),2));
-        LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);cp.setMargins(0,dp(18),0,dp(12));root.addView(card,cp);
-        card.addView(label("V2.0.17｜AI 排隊＋高解析分區＋視覺救援",18,Color.rgb(15,42,92),true));
-        card.addView(label("採購單先做方向／紙張／透視校正、去陰影與去噪，再切 H1/H2/R1/R2/R3/R4；每區放大後由 PP-OCRv6 Small ONNX Runtime + Google ML Kit 各自掃描，再把座標拼回完整採購單。",15,Color.rgb(71,85,105),false));
-        card.addView(label("MiniCPM 不再只等 OCR 報衝突才看圖。它會固定核對 H1/H2/R1-R4 高解析區，再加上 OCR 衝突／低信心局部圖，用來救援漏字或自信誤讀；看不清楚仍留空，不亂猜。",14,Color.rgb(22,101,52),true));
-        card.addView(label("AI 分析可排隊：分析中仍能繼續新增照片、查看等待順序與進度，等待中的項目可上移／下移；完成後可從排隊列表直接前往該張結果。",14,Color.rgb(22,101,52),true));
-        card.addView(label("辨識知識庫可從設定隨時新增、修改、刪除廠商／地址／關鍵字／常購品項；我方全益／台灣電扇名稱仍固定禁止當成供應廠商。",14,Color.rgb(22,101,52),true));
+        // Fixed compact header: always visible, but no longer consumes most of the screen.
+        LinearLayout titleRow=new LinearLayout(this);
+        titleRow.setOrientation(LinearLayout.HORIZONTAL);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        ImageView icon=new ImageView(this);
+        icon.setImageResource(R.drawable.ic_app_icon);
+        titleRow.addView(icon,new LinearLayout.LayoutParams(dp(58),dp(58)));
+        LinearLayout tt=new LinearLayout(this);
+        tt.setOrientation(LinearLayout.VERTICAL);
+        tt.setPadding(dp(12),0,0,0);
+        tt.addView(label("採購單追蹤",24,Color.rgb(15,42,92),true));
+        tt.addView(label("離線 OCR + MiniCPM AI 辨識",13,Color.rgb(37,99,235),true));
+        titleRow.addView(tt,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
+        root.addView(titleRow);
+
+        // Only the information/status area scrolls. Action buttons below stay fixed and reachable.
+        ScrollView scroll=new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.setVerticalScrollBarEnabled(true);
+        LinearLayout content=new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(0,dp(8),0,dp(8));
+        scroll.addView(content,new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout card=new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16),dp(14),dp(16),dp(14));
+        card.setBackground(box(Color.WHITE,Color.rgb(37,99,235),2));
+        LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);
+        cp.setMargins(0,dp(10),0,dp(12));
+        content.addView(card,cp);
+        card.addView(label("V2.0.18｜功能說明（可上下滑動）",17,Color.rgb(15,42,92),true));
+        card.addView(label("採購單會先做方向、紙張、透視校正、去陰影與去噪，再切成 H1/H2/R1/R2/R3/R4 高解析區域。每區放大後由 PP-OCRv6 Small ONNX Runtime + Google ML Kit 掃描，再把座標拼回完整採購單。",14,Color.rgb(71,85,105),false));
+        card.addView(label("MiniCPM 會核對高解析分區，以及 OCR 衝突或低信心的局部圖，用來補救漏字與誤讀；看不清楚的內容會留空，不亂猜。",14,Color.rgb(22,101,52),true));
+        card.addView(label("AI 分析支援排隊與背景處理：分析時仍能繼續新增照片、查看等待順序與進度，完成後可從排隊列表直接開啟結果。",14,Color.rgb(22,101,52),true));
+        card.addView(label("辨識知識庫可從設定新增、修改、刪除廠商、地址、關鍵字與常購品項；全益／台灣電扇等我方名稱固定禁止當成供應廠商。",14,Color.rgb(22,101,52),true));
         card.addView(label("MiniCPM-V 4.6 約 1.6 GB。PP-OCRv6 Small ONNX 已包在 APK；Google 文件掃描與中文 OCR 第一次有網路時由 Play services 準備，之後可離線使用。",13,Color.rgb(100,116,139),false));
 
-        status=label("檢查 MiniCPM-V 4.6 模型中…",15,Color.rgb(71,85,105),false);root.addView(status);
-        progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setMax(100);LinearLayout.LayoutParams pp=new LinearLayout.LayoutParams(-1,dp(20));pp.setMargins(0,dp(8),0,dp(10));root.addView(progress,pp);
+        status=label("檢查 MiniCPM-V 4.6 模型中…",14,Color.rgb(71,85,105),false);
+        content.addView(status);
+        progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
+        progress.setMax(100);
+        LinearLayout.LayoutParams pp=new LinearLayout.LayoutParams(-1,dp(18));
+        pp.setMargins(0,dp(8),0,dp(8));
+        content.addView(progress,pp);
+        content.addView(label("第一次安裝建議保持 Wi-Fi。模型下載 100% 後會核對檔案大小、官方 MD5，並實際載入 native MiniCPM + mmproj；全部通過才會顯示 AI 已就緒。",12,Color.rgb(100,116,139),false));
 
-        download=button("下載 MiniCPM-V 4.6（約 1.6 GB）",Color.rgb(37,99,235));
-        download.setOnClickListener(v->{try{PlayServicesModuleManager.prefetch(this);MiniCpmV46ModelManager.startDownload(this);Toast.makeText(this,"已開始下載本機 AI；Google 離線掃描/OCR 模組也會準備",Toast.LENGTH_LONG).show();refresh();}catch(Exception e){Toast.makeText(this,"下載啟動失敗："+e.getMessage(),Toast.LENGTH_LONG).show();}});root.addView(download,margins(0,5));
+        LinearLayout.LayoutParams scrollParams=new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1f);
+        scrollParams.setMargins(0,dp(4),0,dp(8));
+        root.addView(scroll,scrollParams);
 
-        Button knowledge=button("編輯辨識知識庫／廠商資料庫",Color.rgb(8,145,178));knowledge.setOnClickListener(v->startActivity(new Intent(this,KnowledgeBaseActivity.class)));root.addView(knowledge,margins(5,5));
-        enter=button("進入 APP（僅查看既有資料）",Color.rgb(71,85,105));enter.setOnClickListener(v->openMain());root.addView(enter,margins(5,5));
-        root.addView(label("第一次安裝建議保持 Wi-Fi。下載 100% 後還會檢查實際檔案大小、官方 MD5，並實際載入 native MiniCPM + mmproj；三關都通過才會顯示 AI 已就緒。",13,Color.rgb(100,116,139),false));
+        // Fixed action area: the user can always enter the app without scrolling to the bottom.
+        LinearLayout actions=new LinearLayout(this);
+        actions.setOrientation(LinearLayout.VERTICAL);
+        actions.setPadding(0,dp(4),0,0);
+        enter=button("進入採購單追蹤",Color.rgb(37,99,235));
+        enter.setOnClickListener(v->openMain());
+        actions.addView(enter,margins(0,4));
+        Button knowledge=button("辨識知識庫／廠商資料庫",Color.rgb(8,145,178));
+        knowledge.setOnClickListener(v->startActivity(new Intent(this,KnowledgeBaseActivity.class)));
+        actions.addView(knowledge,margins(3,4));
+        download=button("下載 MiniCPM-V 4.6（約 1.6 GB）",Color.rgb(71,85,105));
+        download.setOnClickListener(v->{try{PlayServicesModuleManager.prefetch(this);MiniCpmV46ModelManager.startDownload(this);Toast.makeText(this,"已開始下載本機 AI；Google 離線掃描/OCR 模組也會準備",Toast.LENGTH_LONG).show();refresh();}catch(Exception e){Toast.makeText(this,"下載啟動失敗："+e.getMessage(),Toast.LENGTH_LONG).show();}});
+        actions.addView(download,margins(3,0));
+        root.addView(actions);
+
         setContentView(root);
     }
 
@@ -70,11 +116,11 @@ public class GemmaSetupActivity extends Activity {
 
     private void refresh() {
         if(MiniCpmV46ModelManager.isReady(this)){
-            status.setText("MiniCPM-V 4.6 已就緒 ✓\nMD5 + native 模型載入測試 ✓\nPP-OCRv6 Small ONNX 已內建 ✓\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(22,163,74));progress.setProgress(100);download.setText("本機 AI 模型已就緒");download.setEnabled(false);enter.setText("進入 APP（分區離線辨識已就緒）");enter.setEnabled(true);return;
+            status.setText("MiniCPM-V 4.6 已就緒 ✓\nMD5 + native 模型載入測試 ✓\nPP-OCRv6 Small ONNX 已內建 ✓\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(22,163,74));progress.setProgress(100);download.setText("本機 AI 模型已就緒");download.setEnabled(false);enter.setText("進入採購單追蹤");enter.setEnabled(true);return;
         }
         MiniCpmV46ModelManager.Status s=MiniCpmV46ModelManager.getStatus(this);
         if(validating){status.setText("模型下載完成，正在核對官方 MD5 並執行 native 載入測試…\n第一次載入可能需要較多記憶體。\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(202,138,4));progress.setProgress(100);download.setEnabled(false);return;}
-        if(s.state==DownloadManager.STATUS_RUNNING||s.state==DownloadManager.STATUS_PENDING||s.state==DownloadManager.STATUS_PAUSED){int p=s.percent();progress.setProgress(p);status.setText("MiniCPM-V 4.6 下載中："+p+"%\n已下載 "+gb(s.downloaded)+" / "+gb(s.total)+" GB\n"+PlayServicesModuleManager.status(this));download.setText("下載進行中…");download.setEnabled(false);enter.setText("進入 APP（下載背景繼續）");return;}
+        if(s.state==DownloadManager.STATUS_RUNNING||s.state==DownloadManager.STATUS_PENDING||s.state==DownloadManager.STATUS_PAUSED){int p=s.percent();progress.setProgress(p);status.setText("MiniCPM-V 4.6 下載中："+p+"%\n已下載 "+gb(s.downloaded)+" / "+gb(s.total)+" GB\n"+PlayServicesModuleManager.status(this));download.setText("下載進行中…");download.setEnabled(false);enter.setText("進入採購單追蹤（下載於背景繼續）");return;}
         if(s.state==DownloadManager.STATUS_SUCCESSFUL&&s.needsValidation){status.setText("下載 100% 完成，準備 MD5 + native 載入驗證…");progress.setProgress(100);download.setEnabled(false);startValidation();return;}
         if((s.validationError!=null&&!s.validationError.isEmpty())||s.state==DownloadManager.STATUS_FAILED){String err=s.validationError!=null&&!s.validationError.isEmpty()?s.validationError:"Android 下載失敗，錯誤碼："+s.reason;status.setText("MiniCPM 模型目前不可使用：\n"+err+"\n請重新下載。\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(220,38,38));progress.setProgress(0);download.setText("重新下載 MiniCPM-V 4.6");download.setEnabled(true);return;}
         status.setText("MiniCPM-V 4.6 尚未安裝，需要約 1.6 GB。\nPP-OCRv6 Small ONNX 已內建。\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(71,85,105));progress.setProgress(0);download.setText("下載 MiniCPM-V 4.6（約 1.6 GB）");download.setEnabled(true);
@@ -84,8 +130,8 @@ public class GemmaSetupActivity extends Activity {
     private void openMain(){Intent i=new Intent(this,EnhancedAiMainActivity.class);i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);startActivity(i);finish();}
     private String gb(long bytes){if(bytes<0)bytes=0;return String.format(java.util.Locale.TAIWAN,"%.2f",bytes/1_000_000_000.0);}
     private TextView label(String text,int sp,int color,boolean bold){TextView v=new TextView(this);v.setText(text);v.setTextSize(sp);v.setTextColor(color);v.setGravity(Gravity.START);v.setLineSpacing(0,1.08f);if(bold)v.setTypeface(Typeface.DEFAULT,Typeface.BOLD);v.setPadding(0,dp(5),0,dp(5));return v;}
-    private Button button(String text,int color){Button b=new Button(this);b.setText(text);b.setAllCaps(false);b.setTextSize(15);b.setTextColor(Color.WHITE);b.setTypeface(Typeface.DEFAULT,Typeface.BOLD);b.setBackground(box(color,Color.rgb(15,23,42),2));b.setPadding(dp(12),dp(10),dp(12),dp(10));return b;}
-    private GradientDrawable box(int fill,int stroke,int width){GradientDrawable g=new GradientDrawable();g.setColor(fill);g.setStroke(dp(width),stroke);g.setCornerRadius(dp(5));return g;}
+    private Button button(String text,int color){Button b=new Button(this);b.setText(text);b.setAllCaps(false);b.setTextSize(15);b.setTextColor(Color.WHITE);b.setTypeface(Typeface.DEFAULT,Typeface.BOLD);b.setBackground(box(color,Color.rgb(15,23,42),1));b.setPadding(dp(12),dp(9),dp(12),dp(9));b.setMinHeight(dp(48));return b;}
+    private GradientDrawable box(int fill,int stroke,int width){GradientDrawable g=new GradientDrawable();g.setColor(fill);g.setStroke(dp(width),stroke);g.setCornerRadius(dp(10));return g;}
     private LinearLayout.LayoutParams margins(int top,int bottom){LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT);p.setMargins(0,dp(top),0,dp(bottom));return p;}
     private int dp(int v){return(int)(v*getResources().getDisplayMetrics().density+0.5f);}
 }

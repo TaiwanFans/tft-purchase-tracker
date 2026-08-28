@@ -106,7 +106,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: TFT-Purchase-Tracker-v2.0.17-APK
+          name: Purchase-Order-Tracker-v2.0.18-APK
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/app-debug.apk.sha256

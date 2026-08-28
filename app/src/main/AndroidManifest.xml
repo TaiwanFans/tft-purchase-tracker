@@ -12,7 +12,7 @@
         android:allowBackup="true"
         android:icon="@drawable/ic_app_icon"
         android:roundIcon="@drawable/ic_app_icon"
-        android:label="全益採購追蹤"
+        android:label="採購單追蹤"
         android:supportsRtl="true"
         android:enableOnBackInvokedCallback="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
