@@ -3,9 +3,9 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, accuracy-pipeline-v216 ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, v2-pixel-ux ]
 
 jobs:
   build:
@@ -74,7 +74,15 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
+      - name: Verify APK and SHA-256
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          sha256sum app/build/outputs/apk/debug/app-debug.apk | tee app/build/outputs/apk/debug/app-debug.apk.sha256
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+
       - uses: actions/upload-artifact@v4
         with:
-          name: TFT-Purchase-Tracker-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: TFT-Purchase-Tracker-v2.0.16-APK
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/app-debug.apk.sha256
