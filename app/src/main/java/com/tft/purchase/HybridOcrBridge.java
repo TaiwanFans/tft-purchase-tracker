@@ -2,26 +2,43 @@ package com.tft.purchase;
 
 import android.content.Context;
 
+import java.io.File;
+
 /**
  * High-accuracy OCR entry point.
- * V2.0.15: document correction -> enlarged numbered tiles -> dual OCR -> global-coordinate reassembly.
+ * V2.0.16: document correction -> enlarged numbered tiles -> dual OCR -> global coordinates ->
+ * conflict-only visual inspection sheet for the replaceable local AI provider.
  */
 public final class HybridOcrBridge {
     private HybridOcrBridge() {}
 
+    public interface Progress {
+        void onProgress(int percent, String stage);
+    }
+
     public static final class Result {
         public final String evidence;
+        /** Small conflict/low-confidence inspection sheet, not the whole A4 page. */
         public final String preparedImagePath;
         private final DocumentPreprocessor.Prepared prepared;
+        private final String inspectionPath;
 
-        Result(String evidence, DocumentPreprocessor.Prepared prepared) {
+        Result(String evidence, DocumentPreprocessor.Prepared prepared, String inspectionPath) {
             this.evidence = evidence == null ? "" : evidence;
             this.prepared = prepared;
-            this.preparedImagePath = prepared == null ? "" : prepared.visionPath;
+            this.inspectionPath = inspectionPath == null ? "" : inspectionPath;
+            this.preparedImagePath = this.inspectionPath.isEmpty() && prepared != null
+                    ? prepared.visionPath : this.inspectionPath;
         }
 
         public void cleanup() {
             if (prepared != null) prepared.cleanup();
+            try {
+                if (!inspectionPath.isEmpty() && (prepared == null ||
+                        (!inspectionPath.equals(prepared.visionPath) && !inspectionPath.equals(prepared.ocrPath)))) {
+                    new File(inspectionPath).delete();
+                }
+            } catch (Throwable ignored) {}
         }
     }
 
@@ -31,37 +48,60 @@ public final class HybridOcrBridge {
     }
 
     public static void recognize(Context context, String sourcePath, Callback callback) {
+        recognize(context, sourcePath, null, callback);
+    }
+
+    public static void recognize(Context context, String sourcePath, Progress progress, Callback callback) {
+        final Context app = context.getApplicationContext();
+        notify(progress, 8, "正在讀取 EXIF 與校正照片方向");
         final DocumentPreprocessor.Prepared prepared;
         try {
-            prepared = DocumentPreprocessor.prepare(context.getApplicationContext(), sourcePath);
+            notify(progress, 12, "正在找出紙張邊界、透視校正、去陰影與去噪");
+            prepared = DocumentPreprocessor.prepare(app, sourcePath);
+            notify(progress, 20, "文件校正完成，準備切割 H1/H2/R1/R2/R3");
         } catch (Throwable t) {
             callback.onFailure("採購單影像前處理失敗：" + safe(t));
             return;
         }
 
-        ZoomTiledOcrBridge.recognize(context, prepared.ocrPath, new ZoomTiledOcrBridge.Callback() {
+        ZoomTiledOcrBridge.recognize(app, prepared.ocrPath, new ZoomTiledOcrBridge.Callback() {
+            @Override public void onProgress(int percent, String stage) {
+                notify(progress, percent, stage);
+            }
+
             @Override public void onSuccess(String evidence) {
-                String enriched = evidence + "\n" + new RecognitionKnowledgeDb(context).buildPromptEvidence();
-                callback.onSuccess(new Result(enriched, prepared));
+                notify(progress, 87, "雙 OCR 座標與衝突資料已重組，正在準備 AI 局部核對區");
+                String enriched = evidence + "\n" + new RecognitionKnowledgeDb(app).buildPromptEvidence();
+                String inspection = "";
+                try {
+                    inspection = AiInspectionImageBuilder.build(app, prepared.visionPath, evidence);
+                } catch (Throwable t) {
+                    // Safe fallback: the AI may inspect the corrected page only if conflict-crop assembly failed.
+                    enriched += "\n[AI_INSPECTION_FALLBACK] local crop builder failed: " + safe(t);
+                    inspection = prepared.visionPath;
+                }
+                notify(progress, 89, "OCR 階段完成；AI 只核對衝突／低信心局部圖片");
+                callback.onSuccess(new Result(enriched, prepared, inspection));
             }
 
             @Override public void onFailure(String error) {
-                fallbackFullPage(context, prepared, callback, error);
+                fallbackFullPage(app, prepared, progress, callback, error);
             }
         });
     }
 
     private static void fallbackFullPage(Context context, DocumentPreprocessor.Prepared prepared,
-                                         Callback callback, String tiledError) {
+                                         Progress progress, Callback callback, String tiledError) {
+        notify(progress, 70, "分區 OCR 未完成，啟用整頁雙 OCR 備援");
         final State state = new State();
         PaddleOcrBridge.recognize(context, prepared.ocrPath, new PaddleOcrCallback() {
             @Override public void onSuccess(String s) { synchronized (state) { state.pp=s==null?"":s; state.done++; finish(); } }
             @Override public void onFailure(String e) { synchronized (state) { state.ppErr=e==null?"":e; state.done++; finish(); } }
-            private void finish(){ finishFallback(context, state, prepared, callback, tiledError); }
+            private void finish(){ finishFallback(context, state, prepared, progress, callback, tiledError); }
         });
         MlKitOcrBridge.recognize(context, prepared.ocrPath, new MlKitOcrBridge.Callback() {
-            @Override public void onSuccess(String s) { synchronized (state) { state.ml=s==null?"":s; state.done++; finishFallback(context, state, prepared, callback, tiledError); } }
-            @Override public void onFailure(String e) { synchronized (state) { state.mlErr=e==null?"":e; state.done++; finishFallback(context, state, prepared, callback, tiledError); } }
+            @Override public void onSuccess(String s) { synchronized (state) { state.ml=s==null?"":s; state.done++; finishFallback(context, state, prepared, progress, callback, tiledError); } }
+            @Override public void onFailure(String e) { synchronized (state) { state.mlErr=e==null?"":e; state.done++; finishFallback(context, state, prepared, progress, callback, tiledError); } }
         });
     }
 
@@ -69,7 +109,8 @@ public final class HybridOcrBridge {
         String pp="",ml="",ppErr="",mlErr=""; int done=0; boolean delivered=false;
     }
 
-    private static void finishFallback(Context context, State s, DocumentPreprocessor.Prepared prepared, Callback callback, String tiledError) {
+    private static void finishFallback(Context context, State s, DocumentPreprocessor.Prepared prepared,
+                                       Progress progress, Callback callback, String tiledError) {
         if (s.done < 2 || s.delivered) return;
         s.delivered = true;
         if (s.pp.trim().isEmpty() && s.ml.trim().isEmpty()) {
@@ -80,11 +121,17 @@ public final class HybridOcrBridge {
         StringBuilder ev = new StringBuilder();
         ev.append("[OCR_FALLBACK_FULL_PAGE]\n")
                 .append("reason=").append(tiledError == null ? "分區 OCR 未完成" : tiledError).append('\n')
-                .append("rule=此為備援結果，重要欄位若不清楚必須人工確認。\n");
+                .append("rule=此為備援結果；所有重要欄位若不清楚必須 NEEDS_CONFIRMATION，禁止猜。\n");
         if (!s.pp.isEmpty()) ev.append(s.pp).append('\n');
         if (!s.ml.isEmpty()) ev.append(s.ml).append('\n');
         ev.append(new RecognitionKnowledgeDb(context).buildPromptEvidence());
-        callback.onSuccess(new Result(ev.toString(), prepared));
+        notify(progress, 86, "整頁雙 OCR 備援完成，重要欄位將強制人工確認");
+        // Fallback really needs the corrected page because tiled spatial conflicts were unavailable.
+        callback.onSuccess(new Result(ev.toString(), prepared, prepared.visionPath));
+    }
+
+    private static void notify(Progress p, int percent, String stage) {
+        if (p != null) p.onProgress(Math.max(1, Math.min(99, percent)), stage);
     }
 
     private static String safe(Throwable t) {
