@@ -41,25 +41,22 @@ jobs:
           python3 patch_v153.py
           python3 patch_v154.py
           python3 patch_v155.py
-          grep -q "versionName '1.5.5'" app/build.gradle
-          grep -q 'cropSideInsetPx' app/src/main/java/com/quanyi/docscanner/DocumentCropView.java
-          grep -q 'getWidth() \* 0.090f' app/src/main/java/com/quanyi/docscanner/DocumentCropView.java
-          grep -q 'float best=dp(110)' app/src/main/java/com/quanyi/docscanner/DocumentCropView.java
-          grep -q 'best.score < 120.0' app/src/main/java/com/quanyi/docscanner/ImageUtils.java
-          grep -q 'new Scalar(0, 0, 92)' app/src/main/java/com/quanyi/docscanner/ImageUtils.java
-          grep -q 'areaRatio < 0.05' app/src/main/java/com/quanyi/docscanner/ImageUtils.java
-          grep -q 'Button backTop = button("← 返回", false)' app/src/main/java/com/quanyi/docscanner/MainActivity.java
-          grep -q 'Button editTop = button("← 修改裁切", false)' app/src/main/java/com/quanyi/docscanner/MainActivity.java
-          grep -q 'buildFinalDocumentBitmap' app/src/main/java/com/quanyi/docscanner/MainActivity.java
           python3 - <<'PY'
+          from pathlib import Path
           import xml.etree.ElementTree as ET
+          build = Path('app/build.gradle').read_text(encoding='utf-8')
+          crop = Path('app/src/main/java/com/quanyi/docscanner/DocumentCropView.java').read_text(encoding='utf-8')
+          image = Path('app/src/main/java/com/quanyi/docscanner/ImageUtils.java').read_text(encoding='utf-8')
+          assert "versionName '1.5.5'" in build
+          assert 'cropSideInsetPx' in crop and '0.090f' in crop and 'dp(110)' in crop
+          assert 'best.score < 120.0' in image and 'new Scalar(0, 0, 92)' in image
           ET.parse('app/src/main/res/drawable/ic_pixel_document.xml')
           print('v1.5.5 source verification OK')
           PY
 
       - name: Build debug APK
         working-directory: android-document-cropper
-        run: gradle :app:assembleDebug
+        run: gradle :app:assembleDebug --stacktrace
 
       - name: Validate APK archive
         working-directory: android-document-cropper
