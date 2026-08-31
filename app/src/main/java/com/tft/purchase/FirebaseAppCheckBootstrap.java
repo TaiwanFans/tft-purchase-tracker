@@ -7,13 +7,7 @@ import com.google.firebase.FirebaseApp;
 import com.google.firebase.appcheck.FirebaseAppCheck;
 import com.google.firebase.appcheck.debug.DebugAppCheckProviderFactory;
 
-/**
- * Firebase App Check bootstrap for the privately distributed v2.1.x test APK.
- * Uses Firebase's official Debug Provider so sideloaded APKs can access AI Logic
- * while App Check is enforced. The generated debug secret stays in app-private
- * SharedPreferences and is only surfaced locally to the user for one-time
- * registration in Firebase Console.
- */
+/** Firebase App Check bootstrap for the privately distributed v2.1.x test APK. */
 public final class FirebaseAppCheckBootstrap {
     private static volatile boolean installed;
     private static final String PREFS_TEMPLATE = "com.google.firebase.appcheck.debug.store.%s";
@@ -33,6 +27,14 @@ public final class FirebaseAppCheckBootstrap {
         } catch (Throwable t) {
             return false;
         }
+    }
+
+    /** Forces provider creation so Firebase generates/persists this device's debug secret. */
+    public static void requestToken(Context context) {
+        try {
+            if (!ensure(context)) return;
+            FirebaseAppCheck.getInstance().getAppCheckToken(false);
+        } catch (Throwable ignored) {}
     }
 
     public static String debugSecret(Context context) {
