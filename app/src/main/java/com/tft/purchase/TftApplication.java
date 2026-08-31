@@ -13,6 +13,7 @@ public class TftApplication extends Application {
         super.onCreate();
         appContext = getApplicationContext();
         try { FirebaseApp.initializeApp(this); } catch (Throwable ignored) {}
+        try { FirebaseAppCheckBootstrap.ensure(this); } catch (Throwable ignored) {}
         try {
             // PP-OCRv6 Small is bundled. Google document scanner/Chinese OCR are best-effort helpers.
             PlayServicesModuleManager.prefetch(this);
