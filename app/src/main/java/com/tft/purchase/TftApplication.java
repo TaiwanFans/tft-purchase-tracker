@@ -3,6 +3,8 @@ package com.tft.purchase;
 import android.app.Application;
 import android.content.Context;
 
+import com.google.firebase.FirebaseApp;
+
 public class TftApplication extends Application {
     private static Context appContext;
 
@@ -10,9 +12,9 @@ public class TftApplication extends Application {
     public void onCreate() {
         super.onCreate();
         appContext = getApplicationContext();
+        try { FirebaseApp.initializeApp(this); } catch (Throwable ignored) {}
         try {
-            // Best-effort first-run download. PP-OCRv6 Medium is bundled, so OCR still has an
-            // offline primary engine even if Google Play services is temporarily unavailable.
+            // PP-OCRv6 Small is bundled. Google document scanner/Chinese OCR are best-effort helpers.
             PlayServicesModuleManager.prefetch(this);
         } catch (Throwable ignored) {}
     }
