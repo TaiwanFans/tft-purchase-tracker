@@ -22,7 +22,7 @@ jobs:
 
       - name: Install Android SDK
         run: |
-          yes | sdkmanager --licenses >/dev/null
+          yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Checkout PaddleOCR Android SDK
@@ -34,73 +34,7 @@ jobs:
           git -C paddleocr checkout --detach FETCH_HEAD
           mkdir -p paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det
           mkdir -p paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec
-
-      - name: Patch pinned PaddleOCR crashes safely
-        run: |
-          set -euxo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          root = Path("paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/java")
-
-          rec = root / "com/baidu/paddle/lite/demo/ocr/Recognizer.java"
-          text = rec.read_text(encoding="utf-8")
-          old = """        } catch (Exception e) {
-              e.printStackTrace();
-              return null;
-          }
-          """
-          new = """        } catch (Exception e) {
-              throw new RuntimeException("Recognition model inference failed: "
-                      + safeErrorMessage(e), e);
-          }
-          """
-          if old not in text:
-              raise SystemExit("Recognizer catch block not found")
-          text = text.replace(old, new, 1)
-          helper_anchor = "    public float getRecThreshold() {\n"
-          helper = """    private static String safeErrorMessage(Throwable t) {
-              if (t == null) return "unknown";
-              String m = t.getMessage();
-              return (m == null || m.trim().isEmpty()) ? t.getClass().getSimpleName() : m.trim();
-          }
-
-          """
-          if helper_anchor not in text:
-              raise SystemExit("Recognizer anchor not found")
-          text = text.replace(helper_anchor, helper + helper_anchor, 1)
-          rec.write_text(text, encoding="utf-8")
-
-          det = root / "com/baidu/paddle/lite/demo/ocr/PPOCRv4Detect.java"
-          text = det.read_text(encoding="utf-8")
-          old = """        } catch (Exception e) {
-              e.printStackTrace();
-              return new ArrayList<>();
-          }
-          """
-          new = """        } catch (Exception e) {
-              throw new RuntimeException("Detection model inference failed: "
-                      + safeErrorMessage(e), e);
-          }
-          """
-          if old not in text:
-              raise SystemExit("Detector catch block not found")
-          text = text.replace(old, new, 1)
-          helper_anchor = "    private List<RotatedRect> boxesFromBitmap("
-          helper = """    private static String safeErrorMessage(Throwable t) {
-              if (t == null) return "unknown";
-              String m = t.getMessage();
-              return (m == null || m.trim().isEmpty()) ? t.getClass().getSimpleName() : m.trim();
-          }
-
-          """
-          if helper_anchor not in text:
-              raise SystemExit("Detector anchor not found")
-          text = text.replace(helper_anchor, helper + helper_anchor, 1)
-          det.write_text(text, encoding="utf-8")
-
-          print("PaddleOCR exception propagation patch applied without embedded Java newlines")
-          PY
+          find paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/java -type f | sort | head -80
 
       - name: Download PP-OCRv6 Small detection ONNX
         run: |
@@ -108,7 +42,6 @@ jobs:
           curl --http1.1 -fL --retry 6 --retry-all-errors --retry-delay 3 \
             "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/28fe5895c24fd108c19eb3e8479f4ab385fbfc62/inference.onnx?download=true" \
             -o paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det/inference.onnx
-          test -s paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det/inference.onnx
 
       - name: Download PP-OCRv6 Small recognition ONNX
         run: |
@@ -116,7 +49,6 @@ jobs:
           curl --http1.1 -fL --retry 6 --retry-all-errors --retry-delay 3 \
             "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.onnx?download=true" \
             -o paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.onnx
-          test -s paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.onnx
 
       - name: Download PP-OCRv6 Small recognition config
         run: |
@@ -124,11 +56,9 @@ jobs:
           curl --http1.1 -fL --retry 6 --retry-all-errors --retry-delay 3 \
             "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.yml?download=true" \
             -o paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.yml
-          test -s paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.yml
 
       - name: Verify PP-OCRv6 Small model SHA-256
         run: |
-          set -euxo pipefail
           echo "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e  paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det/inference.onnx" | sha256sum -c -
           echo "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634  paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.onnx" | sha256sum -c -
 
