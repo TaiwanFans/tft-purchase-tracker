@@ -1,39 +1,22 @@
 plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
+    id 'com.google.gms.google-services'
 }
 
 android {
     namespace 'com.tft.purchase'
     compileSdk 35
-    ndkVersion '27.0.12077973'
 
     defaultConfig {
         applicationId 'com.tft.purchase'
         minSdk 26
         targetSdk 35
-        versionCode 22
-        versionName '2.0.20'
+        versionCode 23
+        versionName '2.1.0'
 
         ndk {
             abiFilters 'arm64-v8a'
-        }
-
-        externalNativeBuild {
-            cmake {
-                arguments '-DCMAKE_BUILD_TYPE=Release',
-                        '-DBUILD_SHARED_LIBS=ON',
-                        '-DLLAMA_BUILD_COMMON=ON',
-                        '-DLLAMA_BUILD_TOOLS=ON',
-                        '-DLLAMA_BUILD_TESTS=OFF',
-                        '-DLLAMA_BUILD_EXAMPLES=OFF',
-                        '-DLLAMA_BUILD_SERVER=OFF',
-                        '-DLLAMA_OPENSSL=OFF',
-                        '-DLLAMA_CURL=OFF',
-                        '-DGGML_NATIVE=OFF',
-                        '-DGGML_LLAMAFILE=ON',
-                        '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
-            }
         }
     }
 
@@ -57,10 +40,6 @@ android {
     }
     kotlinOptions { jvmTarget = '17' }
 
-    externalNativeBuild {
-        cmake { path file('src/main/cpp/CMakeLists.txt'); version '3.22.1' }
-    }
-
     packagingOptions { jniLibs { useLegacyPackaging = false } }
 }
 
@@ -74,6 +53,10 @@ dependencies {
     implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.21.1'
     implementation 'com.quickbirdstudios:opencv:4.5.3'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
+
+    implementation platform('com.google.firebase:firebase-bom:34.18.0')
+    implementation 'com.google.firebase:firebase-ai'
+    implementation 'com.google.guava:guava:31.0.1-android'
 
     testImplementation 'junit:junit:4.13.2'
 }
