@@ -22,7 +22,7 @@ import android.widget.Toast;
 
 import com.google.firebase.FirebaseApp;
 
-/** v2.1.1 non-technical Firebase / Gemini connection helper for privately installed test APKs. */
+/** v2.1.2 non-technical Firebase / Gemini connection helper for privately installed test APKs. */
 public class FirebaseGeminiConnectionActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView projectInfo;
@@ -73,9 +73,9 @@ public class FirebaseGeminiConnectionActivity extends Activity {
 
         LinearLayout infoCard = card(Color.WHITE, Color.rgb(37, 99, 235));
         content.addView(infoCard, cardParams(10, 12));
-        infoCard.addView(label("V2.1.1｜Gemini + Firebase App Check 測試版", 17, Color.rgb(15, 42, 92), true));
-        infoCard.addView(label("PP-OCRv6 Small、ML Kit、OpenCV 與固定 8 欄解析照常保留；Gemini 只做雲端視覺核對，最後仍以固定格線與 OCR 證據為優先。", 13, Color.rgb(71, 85, 105), false));
-        projectInfo = label("正在讀取 Firebase 專桌資訊…", 14, Color.rgb(15, 23, 42), true);
+        infoCard.addView(label("V2.1.2｜完整品名 + Gemini + Firebase App Check", 17, Color.rgb(15, 42, 92), true));
+        infoCard.addView(label("品項追蹤改為直接顯示完整品名，尺寸／型號等規格會併入品名，例如『42寸鐵框』。PP-OCRv6 Small、ML Kit、OpenCV 與固定 8 欄解析照常保留。", 13, Color.rgb(71, 85, 105), false));
+        projectInfo = label("正在讀取 Firebase 專案資訊…", 14, Color.rgb(15, 23, 42), true);
         infoCard.addView(projectInfo);
 
         LinearLayout appCheckCard = card(Color.rgb(255, 251, 235), Color.rgb(245, 158, 11));

@@ -71,7 +71,7 @@ public class PurchaseEditActivity extends Activity {
         page.addView(top);
 
         page.addView(info("AI 先填，你只修錯的地方",
-                "白色欄位代表目前沒有被規則判定衝突；淡黃色欄位才需要優先核對。單一欄位有問題不會再把整張文件標成失敗。儲存後只有人工確認過的內容才會更新本機知識庫。"), margins(10,10));
+                "白色欄位代表目前沒有被規則判定衝突；淡黃色欄位才需要優先核對。品名會直接包含尺寸／型號等規格，例如『42寸鐵框』，不再另外拆一個規格欄。"), margins(10,10));
 
         if (purchase.imagePath != null && !purchase.imagePath.isEmpty() && new File(purchase.imagePath).exists()) {
             ImageView img = new ImageView(this);
@@ -90,7 +90,7 @@ public class PurchaseEditActivity extends Activity {
         applyHeaderWarnings();
 
         page.addView(section("AI 辨識資料｜品項"));
-        page.addView(info("每一列都可修正", "可以修改項次、品名、規格、數量、單位、價格、交貨日期與備註；淡黃色欄位代表該欄位有 OCR／數學／日期衝突。AI 多抓的品項可刪除，漏掉的可新增。"), margins(2,8));
+        page.addView(info("每一列都可修正", "可以修改項次、完整品名（含尺寸／型號／規格）、數量、單位、價格、交貨日期與備註；淡黃色欄位代表該欄位有 OCR／數學／日期衝突。AI 多抓的品項可刪除，漏掉的可新增。"), margins(2,8));
         itemsBox = new LinearLayout(this);
         itemsBox.setOrientation(LinearLayout.VERTICAL);
         page.addView(itemsBox);
@@ -134,14 +134,10 @@ public class PurchaseEditActivity extends Activity {
         head.addView(remove);
         card.addView(head);
 
-        EditText desc = field("品名", item.description);
+        String fullName = PurchaseDbHelper.displayItemName(item.description, item.specification);
+        EditText desc = field("完整品名（例：42寸鐵框）", fullName);
         desc.setMinLines(1);
         card.addView(desc, margins(5,4));
-
-        EditText spec = field("規格", item.specification);
-        spec.setMinLines(2);
-        spec.setGravity(Gravity.TOP | Gravity.START);
-        card.addView(spec, margins(3,4));
 
         LinearLayout r1 = row();
         EditText qty = smallField("數量", item.quantity);
@@ -162,7 +158,7 @@ public class PurchaseEditActivity extends Activity {
         applyItemWarnings(item, qty, unit, price, subtotal, delivery, note);
         CheckBox completed = new CheckBox(this); completed.setText("此品項已完成"); completed.setTextColor(GRAY); completed.setChecked(item.completed); card.addView(completed);
 
-        ItemEditor ed = new ItemEditor(card, line, desc, spec, qty, unit, price, subtotal, delivery, note, completed);
+        ItemEditor ed = new ItemEditor(card, line, desc, qty, unit, price, subtotal, delivery, note, completed);
         editors.add(ed);
         remove.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("刪除此品項？")
                 .setMessage("儲存後才會正式刪除。")
@@ -212,12 +208,11 @@ public class PurchaseEditActivity extends Activity {
         String earliest = "";
         for (ItemEditor e : editors) {
             String desc = value(e.desc);
-            String spec = value(e.spec);
-            if (desc.isEmpty() && spec.isEmpty() && value(e.qty).isEmpty() && value(e.delivery).isEmpty()) continue;
+            if (desc.isEmpty() && value(e.qty).isEmpty() && value(e.delivery).isEmpty()) continue;
             PurchaseDbHelper.PurchaseItem i = new PurchaseDbHelper.PurchaseItem();
             i.lineNo = value(e.line);
             i.description = desc;
-            i.specification = spec;
+            i.specification = "";
             i.quantity = value(e.qty);
             i.unit = value(e.unit);
             i.unitPrice = value(e.price);
@@ -228,7 +223,6 @@ public class PurchaseEditActivity extends Activity {
             items.add(i);
             if (legacy.length() > 0) legacy.append("\n");
             legacy.append(i.description);
-            if (!i.specification.isEmpty()) legacy.append("｜規格：").append(i.specification);
             if (!i.quantity.isEmpty()) legacy.append(" × ").append(i.quantity).append(i.unit);
             if (!i.deliveryDate.isEmpty() && (earliest.isEmpty() || i.deliveryDate.compareTo(earliest) < 0)) earliest = i.deliveryDate;
         }
@@ -238,7 +232,7 @@ public class PurchaseEditActivity extends Activity {
         db.replaceItems(purchase.id, items);
         try { new RecognitionKnowledgeDb(this).learnFromConfirmedPurchase(purchase, items); } catch (Throwable ignored) {}
         try { DriveBackupHelper.backupIfDueAsync(this); } catch (Throwable ignored) {}
-        Toast.makeText(this, "已儲存人工修正；確認過的交易對象、品名與規格已更新到本機辨識知識庫", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "已儲存人工修正；完整品名與已確認資料已更新到本機辨識知識庫", Toast.LENGTH_LONG).show();
         setResult(RESULT_OK);
         finish();
     }
@@ -275,7 +269,7 @@ public class PurchaseEditActivity extends Activity {
     private int dp(int n){return(int)(n*getResources().getDisplayMetrics().density+0.5f);}
 
     private static class ItemEditor {
-        final LinearLayout card; final EditText line, desc, spec, qty, unit, price, subtotal, delivery, note; final CheckBox completed;
-        ItemEditor(LinearLayout card, EditText line, EditText desc, EditText spec, EditText qty, EditText unit, EditText price, EditText subtotal, EditText delivery, EditText note, CheckBox completed){this.card=card;this.line=line;this.desc=desc;this.spec=spec;this.qty=qty;this.unit=unit;this.price=price;this.subtotal=subtotal;this.delivery=delivery;this.note=note;this.completed=completed;}
+        final LinearLayout card; final EditText line, desc, qty, unit, price, subtotal, delivery, note; final CheckBox completed;
+        ItemEditor(LinearLayout card, EditText line, EditText desc, EditText qty, EditText unit, EditText price, EditText subtotal, EditText delivery, EditText note, CheckBox completed){this.card=card;this.line=line;this.desc=desc;this.qty=qty;this.unit=unit;this.price=price;this.subtotal=subtotal;this.delivery=delivery;this.note=note;this.completed=completed;}
     }
 }

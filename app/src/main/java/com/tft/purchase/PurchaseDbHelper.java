@@ -34,6 +34,7 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
         public long purchaseId;
         public String lineNo = "";
         public String description = "";
+        /** Kept only for backward-compatible reads. New/updated rows merge this into description. */
         public String specification = "";
         public String quantity = "";
         public String unit = "";
@@ -182,6 +183,8 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
             if (items != null) {
                 for (PurchaseItem i : items) {
                     i.purchaseId = purchaseId;
+                    i.description = displayItemName(i.description, i.specification);
+                    i.specification = "";
                     db.insert("purchase_items", null, itemValues(i));
                 }
             }
@@ -190,22 +193,27 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
     }
 
     public long insertItem(PurchaseItem i) {
+        if (i != null) {
+            i.description = displayItemName(i.description, i.specification);
+            i.specification = "";
+        }
         return getWritableDatabase().insert("purchase_items", null, itemValues(i));
     }
 
     private ContentValues itemValues(PurchaseItem i) {
+        String mergedName = displayItemName(i == null ? "" : i.description, i == null ? "" : i.specification);
         ContentValues v = new ContentValues();
-        v.put("purchase_id", i.purchaseId);
-        v.put("line_no", i.lineNo);
-        v.put("description", i.description);
-        v.put("specification", i.specification);
-        v.put("quantity", i.quantity);
-        v.put("unit", i.unit);
-        v.put("unit_price", i.unitPrice);
-        v.put("subtotal", i.subtotal);
-        v.put("delivery_date", i.deliveryDate);
-        v.put("note", i.note);
-        v.put("completed", i.completed ? 1 : 0);
+        v.put("purchase_id", i == null ? 0 : i.purchaseId);
+        v.put("line_no", i == null ? "" : i.lineNo);
+        v.put("description", mergedName);
+        v.put("specification", "");
+        v.put("quantity", i == null ? "" : i.quantity);
+        v.put("unit", i == null ? "" : i.unit);
+        v.put("unit_price", i == null ? "" : i.unitPrice);
+        v.put("subtotal", i == null ? "" : i.subtotal);
+        v.put("delivery_date", i == null ? "" : i.deliveryDate);
+        v.put("note", i == null ? "" : i.note);
+        v.put("completed", i != null && i.completed ? 1 : 0);
         return v;
     }
 
@@ -224,8 +232,10 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
                 d.itemId = c.getLong(c.getColumnIndexOrThrow("item_id"));
                 d.vendorName = safe(c.getString(c.getColumnIndexOrThrow("vendor_name")));
                 d.orderNo = safe(c.getString(c.getColumnIndexOrThrow("order_no")));
-                d.description = safe(c.getString(c.getColumnIndexOrThrow("description")));
-                d.specification = safe(c.getString(c.getColumnIndexOrThrow("specification")));
+                String rawDescription = safe(c.getString(c.getColumnIndexOrThrow("description")));
+                String rawSpecification = safe(c.getString(c.getColumnIndexOrThrow("specification")));
+                d.description = displayItemName(rawDescription, rawSpecification);
+                d.specification = "";
                 d.quantity = safe(c.getString(c.getColumnIndexOrThrow("quantity")));
                 d.unit = safe(c.getString(c.getColumnIndexOrThrow("unit")));
                 d.subtotal = safe(c.getString(c.getColumnIndexOrThrow("subtotal")));
@@ -301,9 +311,11 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
         i.id = c.getLong(c.getColumnIndexOrThrow("id"));
         i.purchaseId = c.getLong(c.getColumnIndexOrThrow("purchase_id"));
         i.lineNo = safe(c.getString(c.getColumnIndexOrThrow("line_no")));
-        i.description = safe(c.getString(c.getColumnIndexOrThrow("description")));
+        String rawDescription = safe(c.getString(c.getColumnIndexOrThrow("description")));
         int specIdx = c.getColumnIndex("specification");
-        i.specification = specIdx >= 0 ? safe(c.getString(specIdx)) : "";
+        String rawSpecification = specIdx >= 0 ? safe(c.getString(specIdx)) : "";
+        i.description = displayItemName(rawDescription, rawSpecification);
+        i.specification = "";
         i.quantity = safe(c.getString(c.getColumnIndexOrThrow("quantity")));
         i.unit = safe(c.getString(c.getColumnIndexOrThrow("unit")));
         i.unitPrice = safe(c.getString(c.getColumnIndexOrThrow("unit_price")));
@@ -312,6 +324,37 @@ public class PurchaseDbHelper extends SQLiteOpenHelper {
         i.note = safe(c.getString(c.getColumnIndexOrThrow("note")));
         i.completed = c.getInt(c.getColumnIndexOrThrow("completed")) == 1;
         return i;
+    }
+
+    /**
+     * Tracking UI uses one complete item name. Old rows may still have description/specification split;
+     * this merges them without changing the DB schema so existing installations remain compatible.
+     * Example: description=鐵框, specification=42寸 -> 42寸鐵框.
+     */
+    public static String displayItemName(String description, String specification) {
+        String desc = compactItemText(description);
+        String spec = compactItemText(specification);
+        if (desc.isEmpty()) return spec;
+        if (spec.isEmpty()) return desc;
+
+        String descKey = itemKey(desc);
+        String specKey = itemKey(spec);
+        if (!specKey.isEmpty() && descKey.contains(specKey)) return desc;
+        if (!descKey.isEmpty() && specKey.contains(descKey)) return spec;
+
+        return spec + desc;
+    }
+
+    private static String compactItemText(String s) {
+        if (s == null) return "";
+        String x = s.replace('\r', ' ').replace('\n', ' ').trim();
+        x = x.replaceFirst("^(規格|尺寸)\\s*[:：]\\s*", "");
+        return x.replaceAll("\\s+", " ").trim();
+    }
+
+    private static String itemKey(String s) {
+        return s == null ? "" : s.toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("[\\s｜|,，、;；:：/\\-]+", "");
     }
 
     private static String safe(String s) { return s == null ? "" : s; }
