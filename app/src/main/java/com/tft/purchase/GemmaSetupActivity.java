@@ -1,131 +1,113 @@
 package com.tft.purchase;
 
 import android.app.Activity;
-import android.app.DownloadManager;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 
-/** Launcher/model setup UI. */
+/** Launcher/setup UI for v2.1.0 Gemini network mode. */
 public class GemmaSetupActivity extends Activity {
-    private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView status;
-    private ProgressBar progress;
-    private Button download, enter;
-    private boolean validating = false;
+    private Button enter;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        AiModelRegistry.setActive(this, AiModelRegistry.MINICPM_V46);
+        AiModelRegistry.setActive(this, AiModelRegistry.GEMINI_FIREBASE);
         try { PlayServicesModuleManager.prefetch(this); } catch (Throwable ignored) {}
-        render(); refresh();
+        render();
+        refresh();
     }
 
-    @Override protected void onResume(){super.onResume();handler.post(refreshLoop);}
-    @Override protected void onPause(){handler.removeCallbacks(refreshLoop);super.onPause();}
-
     private void render() {
-        LinearLayout root=new LinearLayout(this);
+        LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18),dp(18),dp(18),dp(16));
+        root.setPadding(dp(18), dp(18), dp(18), dp(16));
         root.setBackgroundColor(Color.rgb(245,248,255));
 
-        LinearLayout titleRow=new LinearLayout(this);
+        LinearLayout titleRow = new LinearLayout(this);
         titleRow.setOrientation(LinearLayout.HORIZONTAL);
         titleRow.setGravity(Gravity.CENTER_VERTICAL);
-        ImageView icon=new ImageView(this);
+        ImageView icon = new ImageView(this);
         icon.setImageResource(R.drawable.ic_app_icon);
-        titleRow.addView(icon,new LinearLayout.LayoutParams(dp(58),dp(58)));
-        LinearLayout tt=new LinearLayout(this);
+        titleRow.addView(icon, new LinearLayout.LayoutParams(dp(58), dp(58)));
+        LinearLayout tt = new LinearLayout(this);
         tt.setOrientation(LinearLayout.VERTICAL);
         tt.setPadding(dp(12),0,0,0);
         tt.addView(label("採購單追蹤",24,Color.rgb(15,42,92),true));
-        tt.addView(label("離線 OCR + 表格結構 + MiniCPM 核對",13,Color.rgb(37,99,235),true));
+        tt.addView(label("Gemini 雲端視覺 + 固定 8 欄 OCR 驗證",13,Color.rgb(37,99,235),true));
         titleRow.addView(tt,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1));
         root.addView(titleRow);
 
-        ScrollView scroll=new ScrollView(this);
-        scroll.setFillViewport(false);
+        ScrollView scroll = new ScrollView(this);
         scroll.setVerticalScrollBarEnabled(true);
-        LinearLayout content=new LinearLayout(this);
+        LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(0,dp(8),0,dp(8));
         scroll.addView(content,new ScrollView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        LinearLayout card=new LinearLayout(this);
+        LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(16),dp(14),dp(16),dp(14));
         card.setBackground(box(Color.WHITE,Color.rgb(37,99,235),2));
-        LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(-1,-2);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1,-2);
         cp.setMargins(0,dp(10),0,dp(12));
         content.addView(card,cp);
-        card.addView(label("V2.0.19｜表格列欄綁定＋欄位級確認",17,Color.rgb(15,42,92),true));
-        card.addView(label("文件先做方向、透視、去陰影與去噪，再由 PP-OCRv6 Small ONNX + Google ML Kit 分區辨識。新版會用 OpenCV 偵測表格橫線／直線，把文字永久綁回同一列與同一欄，禁止跨列拼數量、單價或小計。",14,Color.rgb(71,85,105),false));
-        card.addView(label("MiniCPM 現在主要當局部核對器：先遵守 TO／開立方／單據號碼等表頭角色與表格 Cell，再只處理 OCR 衝突、低信心與漏列。單一欄位有問題不會再把整張文件判成全部待確認。",14,Color.rgb(22,101,52),true));
-        card.addView(label("品項列號會保留來源位數，例如 0001 不再改成 001；規格中的『6英吋』『220V』也禁止被誤當數量。數學衝突只會標記該列，不再用錯誤小計反推候選數量。",14,Color.rgb(22,101,52),true));
-        card.addView(label("AI 分析支援排隊與背景處理；辨識知識庫可隨時編輯。我方全益／台灣電扇名稱仍固定禁止當成交易對象／供應廠商。",14,Color.rgb(22,101,52),true));
-        card.addView(label("MiniCPM-V 4.6 約 1.6 GB。PP-OCRv6 Small ONNX 已包在 APK；Google 文件掃描與中文 OCR 第一次有網路時由 Play services 準備，之後可離線使用。",13,Color.rgb(100,116,139),false));
+        card.addView(label("V2.1.0｜Gemini 網路辨識版",17,Color.rgb(15,42,92),true));
+        card.addView(label("已取消 MiniCPM 1.6 GB 本機模型。採購單會先在手機完成方向／透視／去陰影、PP-OCRv6 Small + ML Kit 與固定 8 欄格線定位，再把校正後完整頁面交給 Firebase AI Logic 的 Gemini 3.5 Flash 讀取。",14,Color.rgb(71,85,105),false));
+        card.addView(label("Gemini 回傳固定 JSON 後，APP 仍會再用供應商角色、採購單號、8 欄位置、數量×單價=小計、交貨日期與『以下空白』等規則驗證，避免 AI 自由猜測。",14,Color.rgb(22,101,52),true));
+        card.addView(label("AI 分析仍支援排隊、背景處理、結果直達與失敗重試；資料庫、照片、提醒、知識庫與 Google Drive 備份都保留。",14,Color.rgb(22,101,52),true));
+        card.addView(label("此版本分析需要網路。PP-OCRv6 Small 仍內建，所以即使 Gemini 暫時失敗，原圖與 OCR 證據仍會保留，之後可重新分析。",13,Color.rgb(100,116,139),false));
 
-        status=label("檢查 MiniCPM-V 4.6 模型中…",14,Color.rgb(71,85,105),false);
+        status = label("檢查 Firebase 設定中…",14,Color.rgb(71,85,105),false);
         content.addView(status);
-        progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);
-        progress.setMax(100);
-        LinearLayout.LayoutParams pp=new LinearLayout.LayoutParams(-1,dp(18));
-        pp.setMargins(0,dp(8),0,dp(8));
-        content.addView(progress,pp);
-        content.addView(label("第一次安裝建議保持 Wi-Fi。模型下載 100% 後會核對檔案大小、官方 MD5，並實際載入 native MiniCPM + mmproj；全部通過才會顯示 AI 已就緒。",12,Color.rgb(100,116,139),false));
 
-        LinearLayout.LayoutParams scrollParams=new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1f);
+        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,0,1f);
         scrollParams.setMargins(0,dp(4),0,dp(8));
         root.addView(scroll,scrollParams);
 
-        LinearLayout actions=new LinearLayout(this);
+        LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.VERTICAL);
         actions.setPadding(0,dp(4),0,0);
-        enter=button("進入採購單追蹤",Color.rgb(37,99,235));
-        enter.setOnClickListener(v->openMain());
+        enter = button("進入採購單追蹤",Color.rgb(37,99,235));
+        enter.setOnClickListener(v -> openMain());
         actions.addView(enter,margins(0,4));
-        Button knowledge=button("辨識知識庫／廠商資料庫",Color.rgb(8,145,178));
-        knowledge.setOnClickListener(v->startActivity(new Intent(this,KnowledgeBaseActivity.class)));
-        actions.addView(knowledge,margins(3,4));
-        download=button("下載 MiniCPM-V 4.6（約 1.6 GB）",Color.rgb(71,85,105));
-        download.setOnClickListener(v->{try{PlayServicesModuleManager.prefetch(this);MiniCpmV46ModelManager.startDownload(this);Toast.makeText(this,"已開始下載本機 AI；Google 離線掃描/OCR 模組也會準備",Toast.LENGTH_LONG).show();refresh();}catch(Exception e){Toast.makeText(this,"下載啟動失敗："+e.getMessage(),Toast.LENGTH_LONG).show();}});
-        actions.addView(download,margins(3,0));
+        Button knowledge = button("辨識知識庫／廠商資料庫",Color.rgb(8,145,178));
+        knowledge.setOnClickListener(v -> startActivity(new Intent(this,KnowledgeBaseActivity.class)));
+        actions.addView(knowledge,margins(3,0));
         root.addView(actions);
 
         setContentView(root);
     }
 
-    private final Runnable refreshLoop=new Runnable(){@Override public void run(){refresh();handler.postDelayed(this,1200);}};
-
     private void refresh() {
-        if(MiniCpmV46ModelManager.isReady(this)){
-            status.setText("MiniCPM-V 4.6 已就緒 ✓\nMD5 + native 模型載入測試 ✓\nPP-OCRv6 Small ONNX 已內建 ✓\nOpenCV 表格結構層已啟用 ✓\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(22,163,74));progress.setProgress(100);download.setText("本機 AI 模型已就緒");download.setEnabled(false);enter.setText("進入採購單追蹤");enter.setEnabled(true);return;
+        AiModelProvider provider = AiModelRegistry.active(this);
+        if (provider.isReady(this)) {
+            status.setText("Firebase 專案已連結 ✓\nGemini 3.5 Flash（Firebase AI Logic）已設為主 AI ✓\nPP-OCRv6 Small ONNX 已內建 ✓\nOpenCV 固定 8 欄解析已啟用 ✓\n" + PlayServicesModuleManager.status(this));
+            status.setTextColor(Color.rgb(22,163,74));
+            enter.setEnabled(true);
+        } else {
+            status.setText("Firebase 尚未初始化。請確認 google-services.json 與 Firebase 專案設定。\n" + PlayServicesModuleManager.status(this));
+            status.setTextColor(Color.rgb(220,38,38));
+            enter.setEnabled(true); // Allow database access even if cloud AI is temporarily unavailable.
         }
-        MiniCpmV46ModelManager.Status s=MiniCpmV46ModelManager.getStatus(this);
-        if(validating){status.setText("模型下載完成，正在核對官方 MD5 並執行 native 載入測試…\n第一次載入可能需要較多記憶體。\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(202,138,4));progress.setProgress(100);download.setEnabled(false);return;}
-        if(s.state==DownloadManager.STATUS_RUNNING||s.state==DownloadManager.STATUS_PENDING||s.state==DownloadManager.STATUS_PAUSED){int p=s.percent();progress.setProgress(p);status.setText("MiniCPM-V 4.6 下載中："+p+"%\n已下載 "+gb(s.downloaded)+" / "+gb(s.total)+" GB\n"+PlayServicesModuleManager.status(this));download.setText("下載進行中…");download.setEnabled(false);enter.setText("進入採購單追蹤（下載於背景繼續）");return;}
-        if(s.state==DownloadManager.STATUS_SUCCESSFUL&&s.needsValidation){status.setText("下載 100% 完成，準備 MD5 + native 載入驗證…");progress.setProgress(100);download.setEnabled(false);startValidation();return;}
-        if((s.validationError!=null&&!s.validationError.isEmpty())||s.state==DownloadManager.STATUS_FAILED){String err=s.validationError!=null&&!s.validationError.isEmpty()?s.validationError:"Android 下載失敗，錯誤碼："+s.reason;status.setText("MiniCPM 模型目前不可使用：\n"+err+"\n請重新下載。\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(220,38,38));progress.setProgress(0);download.setText("重新下載 MiniCPM-V 4.6");download.setEnabled(true);return;}
-        status.setText("MiniCPM-V 4.6 尚未安裝，需要約 1.6 GB。\nPP-OCRv6 Small ONNX 已內建。\n"+PlayServicesModuleManager.status(this));status.setTextColor(Color.rgb(71,85,105));progress.setProgress(0);download.setText("下載 MiniCPM-V 4.6（約 1.6 GB）");download.setEnabled(true);
     }
 
-    private void startValidation(){if(validating)return;validating=true;new Thread(()->{MiniCpmV46ModelManager.ValidationResult r=MiniCpmV46ModelManager.validateDownloadedModel(this);runOnUiThread(()->{validating=false;Toast.makeText(this,r.message,Toast.LENGTH_LONG).show();refresh();});},"minicpm-md5-native-verify").start();}
-    private void openMain(){Intent i=new Intent(this,EnhancedAiMainActivity.class);i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);startActivity(i);finish();}
-    private String gb(long bytes){if(bytes<0)bytes=0;return String.format(java.util.Locale.TAIWAN,"%.2f",bytes/1_000_000_000.0);}
+    private void openMain() {
+        Intent i = new Intent(this, EnhancedAiMainActivity.class);
+        i.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        startActivity(i);
+        finish();
+    }
+
     private TextView label(String text,int sp,int color,boolean bold){TextView v=new TextView(this);v.setText(text);v.setTextSize(sp);v.setTextColor(color);v.setGravity(Gravity.START);v.setLineSpacing(0,1.08f);if(bold)v.setTypeface(Typeface.DEFAULT,Typeface.BOLD);v.setPadding(0,dp(5),0,dp(5));return v;}
     private Button button(String text,int color){Button b=new Button(this);b.setText(text);b.setAllCaps(false);b.setTextSize(15);b.setTextColor(Color.WHITE);b.setTypeface(Typeface.DEFAULT,Typeface.BOLD);b.setBackground(box(color,Color.rgb(15,23,42),1));b.setPadding(dp(12),dp(9),dp(12),dp(9));b.setMinHeight(dp(48));return b;}
     private GradientDrawable box(int fill,int stroke,int width){GradientDrawable g=new GradientDrawable();g.setColor(fill);g.setStroke(dp(width),stroke);g.setCornerRadius(dp(10));return g;}
