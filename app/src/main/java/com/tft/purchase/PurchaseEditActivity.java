@@ -10,7 +10,6 @@ import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -25,7 +24,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Manual correction screen. AI pre-fills everything; confirmed edits also improve local recognition knowledge. */
+/** Manual correction screen. AI pre-fills everything; confirmed edits improve local knowledge. */
 public class PurchaseEditActivity extends Activity {
     private static final int BG = Color.rgb(245, 248, 255);
     private static final int NAVY = Color.rgb(15, 42, 92);
@@ -33,6 +32,8 @@ public class PurchaseEditActivity extends Activity {
     private static final int GREEN = Color.rgb(22, 163, 74);
     private static final int RED = Color.rgb(220, 38, 38);
     private static final int GRAY = Color.rgb(71, 85, 105);
+    private static final int AMBER = Color.rgb(217, 119, 6);
+    private static final int AMBER_BG = Color.rgb(255, 251, 235);
 
     private PurchaseDbHelper db;
     private PurchaseDbHelper.Purchase purchase;
@@ -69,7 +70,8 @@ public class PurchaseEditActivity extends Activity {
         top.addView(title, new LinearLayout.LayoutParams(0,-2,1));
         page.addView(top);
 
-        page.addView(info("AI 先填，你只修錯的地方", "下方欄位都可以修改。儲存後會立刻更新採購單、交貨提醒；你確認過的廠商名稱、地址與常購品項也會加入本機辨識字典。"), margins(10,10));
+        page.addView(info("AI 先填，你只修錯的地方",
+                "白色欄位代表目前沒有被規則判定衝突；淡黃色欄位才需要優先核對。品名會直接包含尺寸／型號等規格，例如『42寸鐵框』，不再另外拆一個規格欄。"), margins(10,10));
 
         if (purchase.imagePath != null && !purchase.imagePath.isEmpty() && new File(purchase.imagePath).exists()) {
             ImageView img = new ImageView(this);
@@ -80,14 +82,15 @@ public class PurchaseEditActivity extends Activity {
             page.addView(img, marginsRaw(-1, dp(280), 4, 10));
         }
 
-        page.addView(section("採購單表頭"));
-        vendorEt = field("供應廠商", purchase.vendorName); page.addView(vendorEt, margins(3,4));
-        locationEt = field("廠商地址", purchase.location); page.addView(locationEt, margins(3,4));
-        orderEt = field("採購單號", purchase.orderNo); page.addView(orderEt, margins(3,4));
-        purchaseDateEt = field("採購日期 YYYY-MM-DD", purchase.purchaseDate); page.addView(purchaseDateEt, margins(3,8));
+        page.addView(section("AI 辨識資料｜文件表頭"));
+        vendorEt = field("交易對象／供應廠商", purchase.vendorName); page.addView(vendorEt, margins(3,4));
+        locationEt = field("交易對象地址／地區", purchase.location); page.addView(locationEt, margins(3,4));
+        orderEt = field("單據／採購單號", purchase.orderNo); page.addView(orderEt, margins(3,4));
+        purchaseDateEt = field("文件／採購日期 YYYY-MM-DD", purchase.purchaseDate); page.addView(purchaseDateEt, margins(3,8));
+        applyHeaderWarnings();
 
-        page.addView(section("品項／數量／交貨日期"));
-        page.addView(info("每一列都可修正", "可以修改品名、數量、單位、價格、交貨日期與備註；AI 多抓的品項可以刪除，漏掉的可以新增。"), margins(2,8));
+        page.addView(section("AI 辨識資料｜品項"));
+        page.addView(info("每一列都可修正", "可以修改項次、完整品名（含尺寸／型號／規格）、數量、單位、價格、交貨日期與備註；淡黃色欄位代表該欄位有 OCR／數學／日期衝突。AI 多抓的品項可刪除，漏掉的可新增。"), margins(2,8));
         itemsBox = new LinearLayout(this);
         itemsBox.setOrientation(LinearLayout.VERTICAL);
         page.addView(itemsBox);
@@ -98,7 +101,7 @@ public class PurchaseEditActivity extends Activity {
         Button add = action("＋ 新增品項", BLUE);
         add.setOnClickListener(v -> {
             PurchaseDbHelper.PurchaseItem i = new PurchaseDbHelper.PurchaseItem();
-            i.lineNo = String.format(java.util.Locale.TAIWAN, "%03d", editors.size()+1);
+            i.lineNo = String.format(java.util.Locale.TAIWAN, "%04d", editors.size()+1);
             addEditor(i);
         });
         page.addView(add, margins(8,8));
@@ -131,9 +134,9 @@ public class PurchaseEditActivity extends Activity {
         head.addView(remove);
         card.addView(head);
 
-        EditText desc = field("品名規格明細", item.description);
-        desc.setMinLines(2);
-        desc.setGravity(Gravity.TOP | Gravity.START);
+        String fullName = PurchaseDbHelper.displayItemName(item.description, item.specification);
+        EditText desc = field("完整品名（例：42寸鐵框）", fullName);
+        desc.setMinLines(1);
         card.addView(desc, margins(5,4));
 
         LinearLayout r1 = row();
@@ -151,22 +154,51 @@ public class PurchaseEditActivity extends Activity {
         r2.addView(delivery, wide);
         card.addView(r2);
 
-        EditText note = field("品項備註", item.note); card.addView(note, margins(3,3));
+        EditText note = field("品項備註／衝突提示", item.note); card.addView(note, margins(3,3));
+        applyItemWarnings(item, qty, unit, price, subtotal, delivery, note);
         CheckBox completed = new CheckBox(this); completed.setText("此品項已完成"); completed.setTextColor(GRAY); completed.setChecked(item.completed); card.addView(completed);
 
         ItemEditor ed = new ItemEditor(card, line, desc, qty, unit, price, subtotal, delivery, note, completed);
         editors.add(ed);
-        remove.setOnClickListener(v -> {
-            new AlertDialog.Builder(this).setTitle("刪除此品項？").setMessage("儲存後才會正式刪除。")
-                    .setNegativeButton("取消", null).setPositiveButton("刪除", (d,w) -> {
-                        editors.remove(ed); itemsBox.removeView(card);
-                    }).show();
-        });
+        remove.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("刪除此品項？")
+                .setMessage("儲存後才會正式刪除。")
+                .setNegativeButton("取消", null).setPositiveButton("刪除", (d,w) -> {
+                    editors.remove(ed); itemsBox.removeView(card);
+                }).show());
         itemsBox.addView(card, margins(4,8));
+    }
+
+    private void applyHeaderWarnings() {
+        String raw = purchase.rawOcr == null ? "" : purchase.rawOcr;
+        if (raw.contains("SELF_COMPANY") || raw.contains("交易對象不完整")) reviewField(vendorEt);
+        if (raw.contains("SELF_COMPANY")) reviewField(locationEt);
+        if (raw.contains("ORDER_NUMBER_DATE_CONFLICT") || raw.contains("單據號碼不是")) reviewField(orderEt);
+        if (raw.contains("ORDER_NUMBER_DATE_CONFLICT") || raw.contains("文件日期無法確認") || raw.contains("採購日期無法確認")) reviewField(purchaseDateEt);
+    }
+
+    private void applyItemWarnings(PurchaseDbHelper.PurchaseItem item, EditText qty, EditText unit,
+                                   EditText price, EditText subtotal, EditText delivery, EditText note) {
+        String n = item == null || item.note == null ? "" : item.note;
+        if (n.contains("NUMBER_CONFLICT")) {
+            reviewField(qty); reviewField(price); reviewField(subtotal); reviewField(note);
+            if (n.contains("規格中的數字") || n.contains("數量或單位欄")) reviewField(unit);
+        }
+        if (n.contains("DATE_CONFLICT")) { reviewField(delivery); reviewField(note); }
+        if (n.contains("需要人工確認") || n.contains("待確認")) reviewField(note);
+    }
+
+    private void reviewField(EditText e) {
+        if (e != null) e.setBackground(box(AMBER_BG, AMBER, 2));
     }
 
     private void saveAll() {
         purchase.vendorName = value(vendorEt);
+        if (AiResultValidator.isSelfCompany(purchase.vendorName)) {
+            vendorEt.setError("這是我方公司名稱，不能當交易對象／供應廠商");
+            vendorEt.requestFocus();
+            Toast.makeText(this, "交易對象不能是全益／台灣電扇等我方公司名稱", Toast.LENGTH_LONG).show();
+            return;
+        }
         purchase.location = value(locationEt);
         purchase.orderNo = value(orderEt).replaceAll("\\s+", "");
         purchase.purchaseDate = normalizeDate(value(purchaseDateEt));
@@ -180,6 +212,7 @@ public class PurchaseEditActivity extends Activity {
             PurchaseDbHelper.PurchaseItem i = new PurchaseDbHelper.PurchaseItem();
             i.lineNo = value(e.line);
             i.description = desc;
+            i.specification = "";
             i.quantity = value(e.qty);
             i.unit = value(e.unit);
             i.unitPrice = value(e.price);
@@ -199,7 +232,7 @@ public class PurchaseEditActivity extends Activity {
         db.replaceItems(purchase.id, items);
         try { new RecognitionKnowledgeDb(this).learnFromConfirmedPurchase(purchase, items); } catch (Throwable ignored) {}
         try { DriveBackupHelper.backupIfDueAsync(this); } catch (Throwable ignored) {}
-        Toast.makeText(this, "已儲存人工修正；廠商與常購品項已更新到本機辨識字典", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, "已儲存人工修正；完整品名與已確認資料已更新到本機辨識知識庫", Toast.LENGTH_LONG).show();
         setResult(RESULT_OK);
         finish();
     }

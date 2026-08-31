@@ -1,0 +1,23 @@
+name: Runner Smoke Test
+
+on:
+  push:
+    branches: [ accuracy-pipeline-v216 ]
+  workflow_dispatch:
+
+jobs:
+  smoke-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Linux runner is alive
+        run: |
+          echo "linux-runner-ok-final-retry"
+          uname -a
+
+  smoke-macos:
+    runs-on: macos-14
+    steps:
+      - name: macOS runner is alive
+        run: |
+          echo "macos-runner-ok-final-retry"
+          uname -a

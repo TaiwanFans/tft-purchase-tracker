@@ -18,8 +18,9 @@ import java.io.File
 import java.util.Locale
 
 /**
- * Primary OCR bridge backed by PP-OCRv6 Medium through PaddleOCR's official Android SDK.
- * V2.0.14 prioritizes dense A4 purchase-order text accuracy over minimum model size.
+ * Primary OCR bridge backed by PP-OCRv6 Small ONNX through PaddleOCR's official Android SDK.
+ * V2.0.17 uses the officially documented Android/ONNX Runtime model tier and relies on
+ * high-resolution overlapping crops instead of forcing a server-sized model on the phone.
  * Box coordinates and confidence are preserved for downstream table/field reasoning.
  */
 object PaddleOcrBridge {
@@ -49,7 +50,7 @@ object PaddleOcrBridge {
                 ))
 
                 val sb = StringBuilder()
-                sb.append("[PP-OCRv6_MEDIUM]\n")
+                sb.append("[PP-OCRv6_SMALL_ONNX]\n")
                 sb.append("engine=onnxruntime; lines=").append(items.size)
                     .append("; det_ms=").append(result.detectionTimeMs)
                     .append("; rec_ms=").append(result.recognitionTimeMs).append('\n')
@@ -59,8 +60,8 @@ object PaddleOcrBridge {
                     val text = item.text.trim()
                     if (text.isEmpty()) continue
                     val b = normalizedBox(item, width, height)
-                    // Keep moderately uncertain text because a second OCR and the image will cross-check it.
-                    if (item.confidence < 0.14f) continue
+                    // Keep moderately uncertain text because ML Kit + local visual crops cross-check it.
+                    if (item.confidence < 0.12f) continue
                     sb.append("[region=").append(region(b.cx, b.cy))
                         .append(" x=").append(f(b.x))
                         .append(" y=").append(f(b.y))
@@ -69,7 +70,7 @@ object PaddleOcrBridge {
                         .append(" conf=").append(String.format(Locale.US, "%.2f", item.confidence))
                         .append("] ").append(text.replace('\n', ' ')).append('\n')
                     kept++
-                    if (kept >= 320) break
+                    if (kept >= 360) break
                 }
                 callback.onSuccess(sb.toString())
             } catch (t: Throwable) {
@@ -84,19 +85,20 @@ object PaddleOcrBridge {
             cached?.let { return@withLock it }
             if (!OpenCVUtils.init(context)) throw IllegalStateException("PP-OCR 無法初始化 OpenCV")
             val config = PaddleOCRConfig(
-                // Dense A4 forms contain tiny characters. A larger detector input keeps more glyph detail.
-                detLimitSideLen = 1280,
+                // Crops are already enlarged before OCR. Keep detector input mobile-friendly so
+                // Small can run fast without losing the tiny purchase-order glyphs we intentionally zoomed.
+                detLimitSideLen = 960,
                 detLimitType = "min",
-                detMaxSideLimit = 3600,
-                detThresh = 0.18f,
-                detBoxThresh = 0.38f,
-                detUnclipRatio = 1.42f,
+                detMaxSideLimit = 3200,
+                detThresh = 0.16f,
+                detBoxThresh = 0.35f,
+                detUnclipRatio = 1.48f,
                 detMaxCandidates = 3500,
                 detUseDilation = false,
                 detScoreMode = "slow",
                 detBoxType = "quad",
-                recScoreThresh = 0.14f,
-                recBatchSize = 4,
+                recScoreThresh = 0.12f,
+                recBatchSize = 6,
             )
             val created = PaddleOCR.create(
                 context = context,
@@ -139,7 +141,7 @@ object PaddleOcrBridge {
     private fun region(x: Float, y: Float): String = when {
         y < 0.30f && x < 0.55f -> "HEADER_LEFT"
         y < 0.30f -> "HEADER_RIGHT"
-        y < 0.78f -> "ITEM_TABLE"
+        y < 0.95f -> "ITEM_TABLE"
         else -> "FOOTER"
     }
 

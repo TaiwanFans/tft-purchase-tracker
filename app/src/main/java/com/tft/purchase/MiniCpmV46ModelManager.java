@@ -7,11 +7,13 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Environment;
 
+import com.example.minicpm_v_demo.LlamaEngine;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.security.MessageDigest;
 
-/** Downloads and verifies the two official MiniCPM-V 4.6 GGUF files used by llama.cpp. */
+/** Downloads, hashes and load-tests the two official MiniCPM-V 4.6 GGUF files. */
 public final class MiniCpmV46ModelManager {
     public static final String MODEL_FILE = "MiniCPM-V-4_6-Q4_K_M.gguf";
     public static final String MMPROJ_FILE = "mmproj-model-f16.gguf";
@@ -22,7 +24,6 @@ public final class MiniCpmV46ModelManager {
     private static final String MMPROJ_URL =
             "https://huggingface.co/openbmb/MiniCPM-V-4.6-gguf/resolve/main/mmproj-model-f16.gguf?download=true";
 
-    // Values published in OpenBMB's official Android demo ModelInfo.kt.
     private static final String MODEL_MD5 = "fd778481dd56b6036dd8f9cf7c1519cf";
     private static final String MMPROJ_MD5 = "54aea6e04d752f47309a48f12795a1a3";
 
@@ -116,7 +117,6 @@ public final class MiniCpmV46ModelManager {
         } else if (s1.state == DownloadManager.STATUS_PENDING || s2.state == DownloadManager.STATUS_PENDING) {
             out.state = DownloadManager.STATUS_PENDING;
         } else if (modelFile(context).isFile() && mmprojFile(context).isFile()) {
-            // DownloadManager history may be gone after an OS cleanup/app upgrade. Verify existing files.
             out.state = DownloadManager.STATUS_SUCCESSFUL;
             out.needsValidation = true;
         }
@@ -131,6 +131,10 @@ public final class MiniCpmV46ModelManager {
         return out;
     }
 
+    /**
+     * Readiness requires all three checks: realistic size, official MD5, and an actual JNI/native load +
+     * mmproj prepare. This prevents the UI from claiming AI is ready merely because a download reached 100%.
+     */
     public static ValidationResult validateDownloadedModel(Context context) {
         SharedPreferences p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         try {
@@ -149,8 +153,12 @@ public final class MiniCpmV46ModelManager {
                 throw new Exception("視覺模型 MD5 不符；請重新下載");
             }
 
+            // Real native-library/model-load test. A successful APK build alone is not enough.
+            LlamaEngine.getInstance(context.getApplicationContext())
+                    .ensureLoaded(model.getAbsolutePath(), mm.getAbsolutePath());
+
             p.edit().putBoolean(KEY_VERIFIED, true).remove(KEY_ERROR).apply();
-            return new ValidationResult(true, "MiniCPM-V 4.6 模型完整性驗證通過");
+            return new ValidationResult(true, "MiniCPM-V 4.6 MD5 與 native 模型載入測試通過");
         } catch (Throwable t) {
             String msg = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
             p.edit().putBoolean(KEY_VERIFIED, false).putString(KEY_ERROR, msg).apply();

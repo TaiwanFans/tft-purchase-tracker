@@ -3,27 +3,15 @@ name: Build Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, accuracy-pipeline-v216 ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, v2-pixel-ux ]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-
-      - name: Checkout pinned MiniCPM Android runtime
-        run: |
-          git init minicpm-v-apps
-          git -C minicpm-v-apps remote add origin https://github.com/OpenBMB/MiniCPM-V-Apps.git
-          git -C minicpm-v-apps fetch --depth 1 origin bbd042eebd333ab64998d2e630e01d58e673ca3f
-          git -C minicpm-v-apps checkout --detach FETCH_HEAD
-
-          git init llama.cpp-omni
-          git -C llama.cpp-omni remote add origin https://github.com/tc-mb/llama.cpp-omni.git
-          git -C llama.cpp-omni fetch --depth 1 origin bebcf1676fe90db4dd9b4e9764d89e48ed52bdd9
-          git -C llama.cpp-omni checkout --detach FETCH_HEAD
 
       - uses: actions/setup-java@v4
         with:
@@ -32,49 +20,117 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK, NDK and CMake
+      - name: Install Android SDK
         run: |
-          yes | sdkmanager --licenses >/dev/null
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Build bundled PP-OCRv6 Medium Android SDK
+      - name: Checkout PaddleOCR Android SDK
         run: |
           set -euxo pipefail
           git init paddleocr
           git -C paddleocr remote add origin https://github.com/PaddlePaddle/PaddleOCR.git
           git -C paddleocr fetch --depth 1 origin 2661c7c0ef5c613e8f93c6e93b2e052399f0f854
           git -C paddleocr checkout --detach FETCH_HEAD
+          mkdir -p paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det
+          mkdir -p paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec
+          find paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/java -type f | sort | head -80
 
-          SDK_DIR="$GITHUB_WORKSPACE/paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models"
-          mkdir -p "$SDK_DIR/det" "$SDK_DIR/rec"
-          curl -fL --retry 4 --retry-delay 3 \
-            "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx/resolve/main/inference.onnx?download=true" \
-            -o "$SDK_DIR/det/inference.onnx"
-          curl -fL --retry 4 --retry-delay 3 \
-            "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/resolve/main/inference.onnx?download=true" \
-            -o "$SDK_DIR/rec/inference.onnx"
-          curl -fL --retry 4 --retry-delay 3 \
-            "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx/resolve/main/inference.yml?download=true" \
-            -o "$SDK_DIR/rec/inference.yml"
+      - name: Download PP-OCRv6 Small detection ONNX
+        run: |
+          set -euxo pipefail
+          curl --http1.1 -fL --retry 6 --retry-all-errors --retry-delay 3 \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/28fe5895c24fd108c19eb3e8479f4ab385fbfc62/inference.onnx?download=true" \
+            -o paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det/inference.onnx
 
-          echo "eb13b44b25bb36f89528b68720af8a61d9cf381176107f465db1757b65d086e1  $SDK_DIR/det/inference.onnx" | sha256sum -c -
-          echo "9c09abf0957f7968c7586464b7397b84ad2387a0497a351af40e9acc71b673ba  $SDK_DIR/rec/inference.onnx" | sha256sum -c -
+      - name: Download PP-OCRv6 Small recognition ONNX
+        run: |
+          set -euxo pipefail
+          curl --http1.1 -fL --retry 6 --retry-all-errors --retry-delay 3 \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.onnx?download=true" \
+            -o paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.onnx
 
-          cd "$GITHUB_WORKSPACE/paddleocr/deploy/ppocr-android"
+      - name: Download PP-OCRv6 Small recognition config
+        run: |
+          set -euxo pipefail
+          curl --http1.1 -fL --retry 6 --retry-all-errors --retry-delay 3 \
+            "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.yml?download=true" \
+            -o paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.yml
+
+      - name: Verify PP-OCRv6 Small model SHA-256
+        run: |
+          echo "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e  paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det/inference.onnx" | sha256sum -c -
+          echo "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634  paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.onnx" | sha256sum -c -
+
+      - name: Build PP-OCRv6 Small Android AAR
+        run: |
+          set -euxo pipefail
+          cd paddleocr/deploy/ppocr-android
           chmod +x gradlew
+          set +e
           ./gradlew :ppocr-sdk:assembleRelease --no-daemon --stacktrace
+          first_status=$?
+          set -e
+          if [ "$first_status" -ne 0 ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          root = Path('.')
+          image_files = list(root.rglob('ImageUtils.java'))
+          predictor_files = list(root.rglob('PPOCRPredictor.java'))
+          if len(image_files) != 1 or len(predictor_files) != 1:
+              raise SystemExit(f"Expected exactly one ImageUtils.java and PPOCRPredictor.java; got {image_files=} {predictor_files=}")
+          image = image_files[0]
+          text = image.read_text(encoding='utf-8')
+          broken = 'return raw.replaceAll("[\n]", "");'
+          fixed = r'return raw.replaceAll("[\\r\\n]", "");'
+          if text.count(broken) != 1:
+              raise SystemExit(f"Known ImageUtils defect not found exactly once in {image}")
+          image.write_text(text.replace(broken, fixed, 1), encoding='utf-8')
+          predictor = predictor_files[0]
+          text = predictor.read_text(encoding='utf-8')
+          broken = '.append("' + chr(10) + '");'
+          fixed = '.append("' + chr(92) + 'n");'
+          if text.count(broken) != 1:
+              raise SystemExit(f"Known PPOCRPredictor defect not found exactly once in {predictor}")
+          predictor.write_text(text.replace(broken, fixed, 1), encoding='utf-8')
+          PY
+            ./gradlew :ppocr-sdk:assembleRelease --no-daemon --stacktrace
+          fi
           mkdir -p "$GITHUB_WORKSPACE/app/libs"
           cp ppocr-sdk/build/outputs/aar/ppocr-sdk-release.aar "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
-          ls -lh "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
+          test -s "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
+      - name: Run golden document regression tests
+        run: gradle :app:testDebugUnitTest --stacktrace
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
+      - name: Verify v2.1.3 APK and SHA-256
+        run: |
+          set -euxo pipefail
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          sha256sum app/build/outputs/apk/debug/app-debug.apk | tee app/build/outputs/apk/debug/app-debug.apk.sha256
+          unzip -l app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/app-debug.contents.txt
+          grep -q "models/det/inference.onnx" app/build/outputs/apk/debug/app-debug.contents.txt
+          grep -q "models/rec/inference.onnx" app/build/outputs/apk/debug/app-debug.contents.txt
+          if grep -Eq "minicpm_v_demo|libllama|libggml|libmtmd" app/build/outputs/apk/debug/app-debug.contents.txt; then
+            echo "ERROR: retired local MiniCPM/llama native runtime is still packaged" >&2
+            exit 1
+          fi
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump xmltree app/build/outputs/apk/debug/app-debug.apk AndroidManifest.xml > app/build/outputs/apk/debug/app-debug.manifest.txt
+          grep -q "PolishedAiMainActivity" app/build/outputs/apk/debug/app-debug.manifest.txt
+          ls -lh app/build/outputs/apk/debug/app-debug.apk
+
       - uses: actions/upload-artifact@v4
         with:
-          name: TFT-Purchase-Tracker-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Purchase-Order-Tracker-v2.1.3-Polished-UI-APK
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/debug/app-debug.apk.sha256
+            app/build/outputs/apk/debug/app-debug.contents.txt
+            app/build/outputs/apk/debug/app-debug.manifest.txt
