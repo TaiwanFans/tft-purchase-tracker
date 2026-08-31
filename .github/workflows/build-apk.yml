@@ -35,41 +35,71 @@ jobs:
           mkdir -p paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det
           mkdir -p paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec
 
-      - name: Patch pinned PaddleOCR Android Java source
+      - name: Patch pinned PaddleOCR crashes safely
         run: |
           set -euxo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
-          matches = list(Path('paddleocr').rglob('PPOCRPredictor.java'))
-          print('PPOCRPredictor candidates:', [str(p) for p in matches])
-          if len(matches) != 1:
-              raise SystemExit(f'Expected exactly one PPOCRPredictor.java, found {len(matches)}')
-          path = matches[0]
-          text = path.read_text(encoding='utf-8')
+          root = Path("paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/java")
 
-          text, det_count = re.subn(
-              r'throw\s+new\s+RuntimeException\(\s*"Detection model inference failed\s*"\s*\+\s*safeErrorMessage\(e\),\s*e\s*\);',
-              'throw new RuntimeException("Detection model inference failed: " + safeErrorMessage(e), e);',
-              text,
-              flags=re.S,
-          )
-          text, rec_count = re.subn(
-              r'throw\s+new\s+RuntimeException\(\s*"Recognition model inference failed\s*"\s*\+\s*safeErrorMessage\(e\),\s*e\s*\);',
-              'throw new RuntimeException("Recognition model inference failed: " + safeErrorMessage(e), e);',
-              text,
-              flags=re.S,
-          )
+          rec = root / "com/baidu/paddle/lite/demo/ocr/Recognizer.java"
+          text = rec.read_text(encoding="utf-8")
+          old = """        } catch (Exception e) {
+              e.printStackTrace();
+              return null;
+          }
+          """
+          new = """        } catch (Exception e) {
+              throw new RuntimeException("Recognition model inference failed: "
+                      + safeErrorMessage(e), e);
+          }
+          """
+          if old not in text:
+              raise SystemExit("Recognizer catch block not found")
+          text = text.replace(old, new, 1)
+          helper_anchor = "    public float getRecThreshold() {\n"
+          helper = """    private static String safeErrorMessage(Throwable t) {
+              if (t == null) return "unknown";
+              String m = t.getMessage();
+              return (m == null || m.trim().isEmpty()) ? t.getClass().getSimpleName() : m.trim();
+          }
 
-          if det_count != 1 or rec_count != 1:
-              print('det_count=', det_count, 'rec_count=', rec_count)
-              start = max(0, text.find('Detection model inference failed') - 250)
-              print(text[start:start+1400])
-              raise SystemExit('Pinned PaddleOCR source shape changed; refusing a blind patch')
+          """
+          if helper_anchor not in text:
+              raise SystemExit("Recognizer anchor not found")
+          text = text.replace(helper_anchor, helper + helper_anchor, 1)
+          rec.write_text(text, encoding="utf-8")
 
-          path.write_text(text, encoding='utf-8')
-          print('Patched:', path, 'counts=', det_count, rec_count)
+          det = root / "com/baidu/paddle/lite/demo/ocr/PPOCRv4Detect.java"
+          text = det.read_text(encoding="utf-8")
+          old = """        } catch (Exception e) {
+              e.printStackTrace();
+              return new ArrayList<>();
+          }
+          """
+          new = """        } catch (Exception e) {
+              throw new RuntimeException("Detection model inference failed: "
+                      + safeErrorMessage(e), e);
+          }
+          """
+          if old not in text:
+              raise SystemExit("Detector catch block not found")
+          text = text.replace(old, new, 1)
+          helper_anchor = "    private List<RotatedRect> boxesFromBitmap("
+          helper = """    private static String safeErrorMessage(Throwable t) {
+              if (t == null) return "unknown";
+              String m = t.getMessage();
+              return (m == null || m.trim().isEmpty()) ? t.getClass().getSimpleName() : m.trim();
+          }
+
+          """
+          if helper_anchor not in text:
+              raise SystemExit("Detector anchor not found")
+          text = text.replace(helper_anchor, helper + helper_anchor, 1)
+          det.write_text(text, encoding="utf-8")
+
+          print("PaddleOCR exception propagation patch applied without embedded Java newlines")
           PY
 
       - name: Download PP-OCRv6 Small detection ONNX
@@ -130,8 +160,8 @@ jobs:
           unzip -l app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/app-debug.contents.txt
           grep -q "models/det/inference.onnx" app/build/outputs/apk/debug/app-debug.contents.txt
           grep -q "models/rec/inference.onnx" app/build/outputs/apk/debug/app-debug.contents.txt
-          if grep -q "minicpm_v_demo" app/build/outputs/apk/debug/app-debug.contents.txt; then
-            echo "ERROR: local MiniCPM native library still packaged" >&2
+          if grep -Eq "minicpm_v_demo|libllama|libggml|libmtmd" app/build/outputs/apk/debug/app-debug.contents.txt; then
+            echo "ERROR: retired local MiniCPM/llama native runtime is still packaged" >&2
             exit 1
           fi
           ls -lh app/build/outputs/apk/debug/app-debug.apk
