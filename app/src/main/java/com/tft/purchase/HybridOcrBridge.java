@@ -6,8 +6,8 @@ import java.io.File;
 
 /**
  * High-accuracy OCR entry point.
- * V2.0.19: document correction -> enlarged dual OCR -> global coordinates -> deterministic
- * header/table structure binding -> representative high-resolution visual inspection sheet.
+ * V2.1.0: document correction -> enlarged dual OCR -> global coordinates -> deterministic
+ * header/table structure binding -> representative inspection sheet + corrected full page for Gemini.
  */
 public final class HybridOcrBridge {
     private HybridOcrBridge() {}
@@ -20,6 +20,8 @@ public final class HybridOcrBridge {
         public final String evidence;
         /** Representative high-resolution sheet plus OCR conflict/low-confidence close-ups. */
         public final String preparedImagePath;
+        /** Corrected full-page color image. Cloud Gemini should inspect this instead of only conflict crops. */
+        public final String fullPageImagePath;
         private final DocumentPreprocessor.Prepared prepared;
         private final String inspectionPath;
 
@@ -27,6 +29,7 @@ public final class HybridOcrBridge {
             this.evidence = evidence == null ? "" : evidence;
             this.prepared = prepared;
             this.inspectionPath = inspectionPath == null ? "" : inspectionPath;
+            this.fullPageImagePath = prepared == null || prepared.visionPath == null ? "" : prepared.visionPath;
             this.preparedImagePath = this.inspectionPath.isEmpty() && prepared != null
                     ? prepared.visionPath : this.inspectionPath;
         }
@@ -78,11 +81,10 @@ public final class HybridOcrBridge {
                 try {
                     inspection = AiInspectionImageBuilder.build(app, prepared.visionPath, structured);
                 } catch (Throwable t) {
-                    // Safe fallback: AI may inspect the corrected page only if crop-sheet assembly fails.
                     enriched += "\n[AI_INSPECTION_FALLBACK] high-resolution crop builder failed: " + safe(t);
                     inspection = prepared.visionPath;
                 }
-                emitProgress(progress, 90, "OCR 與表格結構完成；AI 只核對局部不確定欄位");
+                emitProgress(progress, 90, "OCR 與表格結構完成；Gemini 將核對完整校正頁面");
                 callback.onSuccess(new Result(enriched, prepared, inspection));
             }
 
@@ -127,7 +129,7 @@ public final class HybridOcrBridge {
         if (!s.pp.isEmpty()) ev.append(s.pp).append('\n');
         if (!s.ml.isEmpty()) ev.append(s.ml).append('\n');
         ev.append(new RecognitionKnowledgeDb(context).buildPromptEvidence());
-        emitProgress(progress, 86, "整頁雙 OCR 備援完成；只標記真正不確定的欄位");
+        emitProgress(progress, 86, "整頁雙 OCR 備援完成；Gemini 將讀取完整校正頁面");
         callback.onSuccess(new Result(ev.toString(), prepared, prepared.visionPath));
     }
 
