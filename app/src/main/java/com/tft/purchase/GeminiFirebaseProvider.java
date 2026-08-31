@@ -34,6 +34,7 @@ public final class GeminiFirebaseProvider implements AiModelProvider {
         try {
             FirebaseApp app = FirebaseApp.initializeApp(context.getApplicationContext());
             if (app == null) app = FirebaseApp.getInstance();
+            FirebaseAppCheckBootstrap.ensure(context);
             return app != null;
         } catch (Throwable t) {
             return false;
@@ -44,9 +45,11 @@ public final class GeminiFirebaseProvider implements AiModelProvider {
     public void analyze(Context context, String imagePath, String ocrText,
                         AiProgressCallback progress, AiModelCallback callback) {
         try {
-            emitProgress(progress, 5, "準備 Firebase AI Logic 與 Gemini 雲端辨識");
+            emitProgress(progress, 5, "準備 Firebase AI Logic、App Check 與 Gemini 雲端辨識");
             FirebaseApp app = FirebaseApp.initializeApp(context.getApplicationContext());
             if (app == null) app = FirebaseApp.getInstance();
+            FirebaseAppCheckBootstrap.ensure(context);
+            FirebaseAppCheckBootstrap.requestToken(context);
 
             Bitmap image = decodeForGemini(imagePath);
             emitProgress(progress, 15, "整理固定 8 欄格線、PP-OCR 與 ML Kit 證據");
@@ -112,6 +115,10 @@ public final class GeminiFirebaseProvider implements AiModelProvider {
                 @Override public void onFailure(Throwable t) {
                     try {
                         String msg = t == null || t.getMessage() == null ? "未知網路／Firebase 錯誤" : t.getMessage();
+                        String token = FirebaseAppCheckBootstrap.debugSecret(context);
+                        if (!token.isEmpty() && (msg.contains("403") || msg.toLowerCase().contains("app check") || msg.toLowerCase().contains("permission"))) {
+                            msg += "；請回到啟動畫面，把顯示的 App Check 權杖加入 Firebase Console 後再試。";
+                        }
                         callback.onFailure("Gemini 雲端分析失敗：" + msg);
                     } finally {
                         try { image.recycle(); } catch (Throwable ignored) {}
