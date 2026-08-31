@@ -13,18 +13,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Checkout pinned MiniCPM Android runtime
-        run: |
-          git init minicpm-v-apps
-          git -C minicpm-v-apps remote add origin https://github.com/OpenBMB/MiniCPM-V-Apps.git
-          git -C minicpm-v-apps fetch --depth 1 origin bbd042eebd333ab64998d2e630e01d58e673ca3f
-          git -C minicpm-v-apps checkout --detach FETCH_HEAD
-
-          git init llama.cpp-omni
-          git -C llama.cpp-omni remote add origin https://github.com/tc-mb/llama.cpp-omni.git
-          git -C llama.cpp-omni fetch --depth 1 origin bebcf1676fe90db4dd9b4e9764d89e48ed52bdd9
-          git -C llama.cpp-omni checkout --detach FETCH_HEAD
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -32,10 +20,10 @@ jobs:
 
       - uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK, NDK and CMake
+      - name: Install Android SDK
         run: |
           yes | sdkmanager --licenses >/dev/null
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Checkout PaddleOCR Android SDK
         run: |
@@ -50,29 +38,26 @@ jobs:
       - name: Download PP-OCRv6 Small detection ONNX
         run: |
           set -euxo pipefail
-          curl -fL --retry 4 --retry-delay 3 \
+          curl --http1.1 -fL --retry 6 --retry-all-errors --retry-delay 3 \
             "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/28fe5895c24fd108c19eb3e8479f4ab385fbfc62/inference.onnx?download=true" \
             -o paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det/inference.onnx
           test -s paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det/inference.onnx
-          ls -lh paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det/inference.onnx
 
       - name: Download PP-OCRv6 Small recognition ONNX
         run: |
           set -euxo pipefail
-          curl -fL --retry 4 --retry-delay 3 \
+          curl --http1.1 -fL --retry 6 --retry-all-errors --retry-delay 3 \
             "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.onnx?download=true" \
             -o paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.onnx
           test -s paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.onnx
-          ls -lh paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.onnx
 
       - name: Download PP-OCRv6 Small recognition config
         run: |
           set -euxo pipefail
-          curl -fL --retry 4 --retry-delay 3 \
+          curl --http1.1 -fL --retry 6 --retry-all-errors --retry-delay 3 \
             "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.yml?download=true" \
             -o paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.yml
           test -s paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.yml
-          wc -c paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec/inference.yml
 
       - name: Verify PP-OCRv6 Small model SHA-256
         run: |
@@ -89,7 +74,6 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/app/libs"
           cp ppocr-sdk/build/outputs/aar/ppocr-sdk-release.aar "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
           test -s "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
-          ls -lh "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -101,15 +85,24 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Verify APK and SHA-256
+      - name: Verify v2.1.0 APK and SHA-256
         run: |
+          set -euxo pipefail
           test -s app/build/outputs/apk/debug/app-debug.apk
           sha256sum app/build/outputs/apk/debug/app-debug.apk | tee app/build/outputs/apk/debug/app-debug.apk.sha256
+          unzip -l app/build/outputs/apk/debug/app-debug.apk > app/build/outputs/apk/debug/app-debug.contents.txt
+          grep -q "models/det/inference.onnx" app/build/outputs/apk/debug/app-debug.contents.txt
+          grep -q "models/rec/inference.onnx" app/build/outputs/apk/debug/app-debug.contents.txt
+          if grep -q "minicpm_v_demo" app/build/outputs/apk/debug/app-debug.contents.txt; then
+            echo "ERROR: local MiniCPM native library still packaged" >&2
+            exit 1
+          fi
           ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Purchase-Order-Tracker-v2.0.20-APK
+          name: Purchase-Order-Tracker-v2.1.0-Gemini-APK
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/app-debug.apk.sha256
+            app/build/outputs/apk/debug/app-debug.contents.txt
