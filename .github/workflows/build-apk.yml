@@ -97,9 +97,11 @@ jobs:
 
           predictor = predictor_files[0]
           text = predictor.read_text(encoding='utf-8')
-          prefix = '        sb.append("# source=").append(r.source == null ? "paddle_onnx" : r.source).append(" conf=").append(String.format(Locale.ROOT, "%.4f", r.confidence)).append('
-          broken = prefix + '"\n");'
-          fixed = prefix + r"'\n');"
+          # Broken upstream-generated source is literally .append(" + newline + ");
+          # Build both strings with chr() so YAML/JSON/Python escaping cannot turn
+          # the repaired Java escape sequence back into a real line break.
+          broken = '.append("' + chr(10) + '");'
+          fixed = '.append("' + chr(92) + 'n");'
           if text.count(broken) != 1:
               raise SystemExit(f"Known PPOCRPredictor defect not found exactly once in {predictor}")
           text = text.replace(broken, fixed, 1)
