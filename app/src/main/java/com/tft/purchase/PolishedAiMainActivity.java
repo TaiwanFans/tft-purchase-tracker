@@ -19,10 +19,8 @@ import java.util.List;
 
 /**
  * v2.1.3 visual polish layer.
- *
  * Keeps the existing EnhancedAiMainActivity behaviour intact and only improves hierarchy,
- * wording and touch presentation. The procurement/OCR/database/queue logic stays in the
- * existing activities and services.
+ * wording and touch presentation. Procurement/OCR/database/queue logic remains unchanged.
  */
 public class PolishedAiMainActivity extends EnhancedAiMainActivity {
     private static final int NAVY = Color.rgb(15, 42, 92);
@@ -33,9 +31,9 @@ public class PolishedAiMainActivity extends EnhancedAiMainActivity {
     private static final int AMBER = Color.rgb(202, 138, 4);
     private static final int GREEN = Color.rgb(22, 163, 74);
     private static final int SOFT_BLUE = Color.rgb(239, 246, 255);
-    private static final int SOFT_GRAY = Color.rgb(248, 250, 252);
     private static final String DUE_TAG = "v213_due_polished";
     private static final String PURCHASE_TAG = "v213_purchase_polished";
+    private static final String CONNECTION_TAG = "v213_connection_settings";
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
 
@@ -65,6 +63,7 @@ public class PolishedAiMainActivity extends EnhancedAiMainActivity {
         if (getWindow() == null || getWindow().getDecorView() == null) return;
         View root = getWindow().getDecorView();
         rewriteLegacyCopy(root);
+        injectConnectionSettings(root);
         polishBottomNav(root);
         polishDueCards(root);
         polishPurchaseCards(root);
@@ -78,18 +77,10 @@ public class PolishedAiMainActivity extends EnhancedAiMainActivity {
             String old = t.getText() == null ? "" : t.getText().toString();
             String next = old;
             if ("全益採購追蹤".equals(next)) next = "採購單追蹤";
-            if (next.contains("ML KIT OCR + MINICPM-V 4.6")) {
-                next = next.replace("ML KIT OCR + MINICPM-V 4.6", "PP-OCRv6 Small + Gemini");
-            }
-            if (next.contains("ML Kit OCR + MiniCPM-V 4.6")) {
-                next = next.replace("ML Kit OCR + MiniCPM-V 4.6", "PP-OCRv6 Small / ML Kit + Gemini");
-            }
-            if (next.contains("ML Kit OCR 與 MiniCPM-V 4.6")) {
-                next = next.replace("ML Kit OCR 與 MiniCPM-V 4.6", "PP-OCRv6 Small、ML Kit 與 Gemini");
-            }
-            if (next.contains("OCR + MiniCPM 正在背景分析")) {
-                next = next.replace("OCR + MiniCPM 正在背景分析", "OCR + Gemini 正在背景分析");
-            }
+            if (next.contains("ML KIT OCR + MINICPM-V 4.6")) next = next.replace("ML KIT OCR + MINICPM-V 4.6", "PP-OCRv6 Small + Gemini");
+            if (next.contains("ML Kit OCR + MiniCPM-V 4.6")) next = next.replace("ML Kit OCR + MiniCPM-V 4.6", "PP-OCRv6 Small / ML Kit + Gemini");
+            if (next.contains("ML Kit OCR 與 MiniCPM-V 4.6")) next = next.replace("ML Kit OCR 與 MiniCPM-V 4.6", "PP-OCRv6 Small、ML Kit 與 Gemini");
+            if (next.contains("OCR + MiniCPM 正在背景分析")) next = next.replace("OCR + MiniCPM 正在背景分析", "OCR + Gemini 正在背景分析");
             if (next.contains("OCR + 本機 AI 自動處理")) next = "OCR + Gemini 自動辨識";
             if (next.contains("Google ML Kit 先讀取採購單文字，再由 MiniCPM-V 4.6")) {
                 next = "手機先完成文件校正、PP-OCRv6 Small / ML Kit 與固定 8 欄定位，再交由 Gemini 核對完整頁面；最後仍以格線位置、OCR 證據與數學規則驗證。";
@@ -100,16 +91,60 @@ public class PolishedAiMainActivity extends EnhancedAiMainActivity {
                 next = "Firebase AI Logic / Gemini 網路視覺已啟用；PP-OCRv6 Small、ML Kit、OpenCV 與固定 8 欄解析照常保留。";
             }
             if (next.contains("前往安裝本機 AI 模型")) next = "檢查 Firebase / Gemini 連線";
+            if (next.contains("選擇採購單照片 → AI 自動填寫")) next = "掃描／選擇採購單 → AI 自動辨識";
+            if (next.equals("＋ AI 分析新採購單")) next = "＋ 掃描／匯入採購單";
             if (!next.equals(old)) t.setText(next);
 
             if (t instanceof Button && "檢查 Firebase / Gemini 連線".contentEquals(t.getText())) {
-                t.setOnClickListener(v -> startActivity(new Intent(this, FirebaseGeminiConnectionActivity.class)));
+                t.setOnClickListener(v -> openConnectionSettings());
             }
         }
         if (view instanceof ViewGroup) {
             ViewGroup g = (ViewGroup) view;
             for (int i = 0; i < g.getChildCount(); i++) rewriteLegacyCopy(g.getChildAt(i));
         }
+    }
+
+    /** Firebase/App Check remains reachable from Settings even after first-time setup is skipped. */
+    private void injectConnectionSettings(View root) {
+        TextView section = findText(root, "AI 辨識");
+        if (section == null || !(section.getParent() instanceof LinearLayout)) return;
+        LinearLayout page = (LinearLayout) section.getParent();
+        if (page.findViewWithTag(CONNECTION_TAG) != null) return;
+        Button b = new Button(this);
+        b.setTag(CONNECTION_TAG);
+        b.setText("Firebase / Gemini 連線設定");
+        b.setAllCaps(false);
+        b.setTextSize(14.5f);
+        b.setTextColor(Color.WHITE);
+        b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        b.setPadding(dp(12), dp(10), dp(12), dp(10));
+        b.setMinHeight(dp(48));
+        b.setBackground(round(BLUE, BLUE, 0, 14));
+        b.setOnClickListener(v -> openConnectionSettings());
+        int sectionIndex = page.indexOfChild(section);
+        int insertAt = Math.min(page.getChildCount(), Math.max(0, sectionIndex + 2));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMargins(dp(2), dp(6), dp(2), dp(10));
+        page.addView(b, insertAt, lp);
+    }
+
+    private void openConnectionSettings() {
+        Intent i = new Intent(this, FirebaseGeminiConnectionActivity.class);
+        i.putExtra("force_connection_setup", true);
+        startActivity(i);
+    }
+
+    private TextView findText(View view, String exact) {
+        if (view instanceof TextView && exact.contentEquals(((TextView) view).getText())) return (TextView) view;
+        if (view instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) view;
+            for (int i = 0; i < g.getChildCount(); i++) {
+                TextView found = findText(g.getChildAt(i), exact);
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     /** Bottom navigation becomes a clearer four-tab bar with a selected pill. */
@@ -119,7 +154,7 @@ public class PolishedAiMainActivity extends EnhancedAiMainActivity {
         for (Button b : tabs) {
             String raw = b.getText() == null ? "" : b.getText().toString();
             String base = raw.replace("⌂ ", "").replace("▣ ", "").replace("⏰ ", "").replace("⚙ ", "");
-            boolean selected = b.getCurrentTextColor() == BLUE || b.getTypeface() != null && b.getTypeface().isBold();
+            boolean selected = b.getCurrentTextColor() == BLUE || (b.getTypeface() != null && b.getTypeface().isBold());
             if ("首頁".equals(base)) b.setText("⌂ 首頁");
             else if ("採購單".equals(base)) b.setText("▣ 採購單");
             else if ("提醒".equals(base)) b.setText("⏰ 提醒");
@@ -149,10 +184,7 @@ public class PolishedAiMainActivity extends EnhancedAiMainActivity {
         }
     }
 
-    /**
-     * The due card is the core workflow screen. Make the product the hero instead of the vendor.
-     * Expected parent structure from AiMainActivity: vendor/status row, delivery/order text, item/qty text.
-     */
+    /** Make the tracked item the hero instead of the vendor. */
     private void polishDueCards(View root) {
         if (!(root instanceof ViewGroup)) return;
         ViewGroup group = (ViewGroup) root;
@@ -176,7 +208,6 @@ public class PolishedAiMainActivity extends EnhancedAiMainActivity {
         card.setPadding(dp(17), dp(14), dp(17), dp(14));
         card.setBackground(round(Color.WHITE, statusColor, 2, 16));
 
-        // Make the actual tracked item the first large line after the vendor/status row.
         int itemIndex = card.indexOfChild(item);
         if (itemIndex > 1) {
             card.removeView(item);
@@ -189,7 +220,7 @@ public class PolishedAiMainActivity extends EnhancedAiMainActivity {
         item.setPadding(dp(1), dp(8), dp(1), dp(6));
 
         String meta = delivery.getText() == null ? "" : delivery.getText().toString();
-        meta = meta.replace("交貨日　", "交貨　").replace("採購單　", "採購單　");
+        meta = meta.replace("交貨日　", "交貨　");
         delivery.setText(meta);
         delivery.setTextSize(13.5f);
         delivery.setTextColor(GRAY);
