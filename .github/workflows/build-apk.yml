@@ -35,6 +35,40 @@ jobs:
           mkdir -p paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/det
           mkdir -p paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/assets/models/rec
 
+      - name: Patch pinned PaddleOCR Android Java source
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/java/com/baidu/paddle/lite/demo/ocr/PPOCRPredictor.java')
+          text = path.read_text(encoding='utf-8')
+          original = text
+
+          text, det_count = re.subn(
+              r'throw\s+new\s+RuntimeException\(\s*"Detection model inference failed\s*"\s*\+\s*safeErrorMessage\(e\),\s*e\s*\);',
+              'throw new RuntimeException("Detection model inference failed: " + safeErrorMessage(e), e);',
+              text,
+              flags=re.S,
+          )
+          text, rec_count = re.subn(
+              r'throw\s+new\s+RuntimeException\(\s*"Recognition model inference failed\s*"\s*\+\s*safeErrorMessage\(e\),\s*e\s*\);',
+              'throw new RuntimeException("Recognition model inference failed: " + safeErrorMessage(e), e);',
+              text,
+              flags=re.S,
+          )
+
+          if det_count != 1 or rec_count != 1:
+              print('det_count=', det_count, 'rec_count=', rec_count)
+              start = max(0, text.find('Detection model inference failed') - 250)
+              print(text[start:start+1200])
+              raise SystemExit('Pinned PaddleOCR source shape changed; refusing a blind patch')
+
+          path.write_text(text, encoding='utf-8')
+          print('Patched upstream Java literals:', det_count, rec_count)
+          PY
+
       - name: Download PP-OCRv6 Small detection ONNX
         run: |
           set -euxo pipefail
