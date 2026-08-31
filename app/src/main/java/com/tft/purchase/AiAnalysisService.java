@@ -12,10 +12,10 @@ import android.os.IBinder;
 
 import java.util.ArrayList;
 
-/** Foreground service for the offline document/OCR/AI/validation pipeline. */
+/** Foreground service for document/OCR -> Firebase Gemini -> deterministic validation pipeline. */
 public class AiAnalysisService extends Service {
     public static final String ACTION_UPDATE = "com.tft.purchase.AI_JOB_UPDATE";
-    private static final String CHANNEL = "local_ai_analysis_v219";
+    private static final String CHANNEL = "cloud_ai_analysis_v210";
     private static final int NOTIFICATION_ID = 8235708;
     private volatile boolean processing = false;
     private int created = 0;
@@ -33,7 +33,7 @@ public class AiAnalysisService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         createChannel();
-        startForeground(NOTIFICATION_ID, notification("準備 AI 分析排隊工作", 1, false));
+        startForeground(NOTIFICATION_ID, notification("準備 Gemini 分析排隊工作", 1, false));
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -46,7 +46,7 @@ public class AiAnalysisService extends Service {
 
         AiModelProvider provider = AiModelRegistry.active(this);
         if (!provider.isReady(this)) {
-            String msg = provider.displayName() + " 模型尚未下載、驗證並通過載入測試";
+            String msg = provider.displayName() + " 尚未完成 Firebase 初始化，請確認 Firebase 設定";
             AiJobStore.error(this, msg);
             publish(msg, 100, true);
             stopSelf();
@@ -100,22 +100,22 @@ public class AiAnalysisService extends Service {
             updateJob(index, itemProgress, text);
         }, new HybridOcrBridge.Callback() {
             @Override public void onSuccess(HybridOcrBridge.Result result) {
-                String modelImage = result.preparedImagePath == null || result.preparedImagePath.isEmpty()
-                        ? originalPath : result.preparedImagePath;
-                runLocalModel(index, item, originalPath, modelImage, result.evidence, result);
+                String modelImage = result.fullPageImagePath == null || result.fullPageImagePath.isEmpty()
+                        ? originalPath : result.fullPageImagePath;
+                runAiModel(index, item, originalPath, modelImage, result.evidence, result);
             }
 
             @Override public void onFailure(String error) {
                 String evidence = "[OCR_ERROR] " + (error == null ? "雙 OCR 未完成" : error);
-                updateJob(index, 78, positionText(index) + "｜OCR 未完成，保留原圖並嘗試本機 AI");
-                runLocalModel(index, item, originalPath, originalPath, evidence, null);
+                updateJob(index, 78, positionText(index) + "｜OCR 未完成，改由 Gemini 讀取原圖並保留待確認標記");
+                runAiModel(index, item, originalPath, originalPath, evidence, null);
             }
         });
     }
 
-    private void runLocalModel(int index, AiJobStore.QueueItem item,
-                               String originalPath, String modelImagePath, String ocrEvidence,
-                               HybridOcrBridge.Result hybridResult) {
+    private void runAiModel(int index, AiJobStore.QueueItem item,
+                            String originalPath, String modelImagePath, String ocrEvidence,
+                            HybridOcrBridge.Result hybridResult) {
         AiModelProvider provider = AiModelRegistry.active(this);
         provider.analyze(this, modelImagePath, ocrEvidence, (percent, stage) -> {
             int itemProgress = 82 + Math.max(0, Math.min(13, percent * 13 / 100));
@@ -123,7 +123,7 @@ public class AiAnalysisService extends Service {
         }, new AiModelCallback() {
             @Override public void onSuccess(String response) {
                 try {
-                    updateJob(index, 97, positionText(index) + "｜欄位級驗證：交易角色、表格列、日期與金額");
+                    updateJob(index, 97, positionText(index) + "｜固定版型驗證：交易角色、8 欄表格、日期與金額");
                     PurchaseOcrParser.ParsedPurchase parsed = AiJsonParser.parse(response, ocrEvidence);
                     AiResultValidator.Validation validation = AiResultValidator.validateAndSanitize(parsed);
                     boolean reliable = validation.reliable;
@@ -139,7 +139,7 @@ public class AiAnalysisService extends Service {
                 } catch (Throwable t) {
                     try {
                         long id = savePlaceholder(originalPath, item.replaceId,
-                                "AI 結果處理失敗：" + safeMessage(t), ocrEvidence);
+                                "Gemini 結果處理失敗：" + safeMessage(t), ocrEvidence);
                         created++;
                         warnings++;
                         AiJobStore.appendId(AiAnalysisService.this, id);
@@ -156,12 +156,12 @@ public class AiAnalysisService extends Service {
             @Override public void onFailure(String error) {
                 try {
                     long id = savePlaceholder(originalPath, item.replaceId,
-                            error == null ? "本機 AI 分析失敗" : error, ocrEvidence);
+                            error == null ? "Gemini 雲端分析失敗" : error, ocrEvidence);
                     created++;
                     warnings++;
                     AiJobStore.appendId(AiAnalysisService.this, id);
                     AiJobStore.checkpointNextIndex(AiAnalysisService.this, index + 1, created, warnings);
-                    updateJob(index, 99, "第 " + (index + 1) + " 張已留下原圖＋OCR 原始資料，可重新 AI 分析");
+                    updateJob(index, 99, "第 " + (index + 1) + " 張已留下原圖＋OCR 原始資料，可在有網路時重新分析");
                 } catch (Throwable persistError) {
                     AiJobStore.error(AiAnalysisService.this, "AI 失敗且無法建立重試紀錄：" + safeMessage(persistError));
                 } finally {
@@ -280,8 +280,8 @@ public class AiAnalysisService extends Service {
         if (Build.VERSION.SDK_INT < 26) return;
         NotificationManager nm = (NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if (nm == null) return;
-        NotificationChannel c = new NotificationChannel(CHANNEL, "採購單追蹤｜本機 AI 排隊", NotificationManager.IMPORTANCE_LOW);
-        c.setDescription("排隊處理文件校正、PP-OCRv6 Small、OpenCV 表格列欄綁定、ML Kit 與局部 MiniCPM 驗證");
+        NotificationChannel c = new NotificationChannel(CHANNEL, "採購單追蹤｜Gemini AI 排隊", NotificationManager.IMPORTANCE_LOW);
+        c.setDescription("排隊處理文件校正、PP-OCRv6 Small、OpenCV 固定 8 欄、ML Kit、Gemini 雲端視覺與欄位驗證");
         c.setSound(null, null);
         nm.createNotificationChannel(c);
     }
@@ -295,7 +295,7 @@ public class AiAnalysisService extends Service {
         Notification.Builder b = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
         b.setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle(finished ? "採購單追蹤｜AI 排隊完成" : "採購單追蹤｜AI 分析排隊中")
+                .setContentTitle(finished ? "採購單追蹤｜AI 排隊完成" : "採購單追蹤｜Gemini 分析排隊中")
                 .setContentText(text)
                 .setContentIntent(pi)
                 .setOnlyAlertOnce(true)
