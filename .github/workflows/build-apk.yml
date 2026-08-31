@@ -110,7 +110,7 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Verify v2.1.2 APK and SHA-256
+      - name: Verify v2.1.3 APK and SHA-256
         run: |
           set -euxo pipefail
           test -s app/build/outputs/apk/debug/app-debug.apk
@@ -122,12 +122,13 @@ jobs:
             echo "ERROR: retired local MiniCPM/llama native runtime is still packaged" >&2
             exit 1
           fi
+          unzip -p app/build/outputs/apk/debug/app-debug.apk classes.dex | strings | grep -q "PolishedAiMainActivity"
           unzip -p app/build/outputs/apk/debug/app-debug.apk classes.dex | strings | grep -q "Firebase App Check" || true
           ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Purchase-Order-Tracker-v2.1.2-Full-Item-Name-APK
+          name: Purchase-Order-Tracker-v2.1.3-Polished-UI-APK
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/app-debug.apk.sha256
