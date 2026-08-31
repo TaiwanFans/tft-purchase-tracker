@@ -1,11 +1,16 @@
 package com.tft.purchase;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -13,18 +18,26 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
-/** Launcher/setup UI for v2.1.0 Gemini network mode. */
+/** Launcher/setup UI for v2.1.1 Gemini network mode + App Check helper. */
 public class GemmaSetupActivity extends Activity {
     private TextView status;
+    private TextView appCheckToken;
+    private Button copyToken;
     private Button enter;
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         AiModelRegistry.setActive(this, AiModelRegistry.GEMINI_FIREBASE);
+        FirebaseAppCheckBootstrap.ensure(this);
+        FirebaseAppCheckBootstrap.requestToken(this);
         try { PlayServicesModuleManager.prefetch(this); } catch (Throwable ignored) {}
         render();
         refresh();
+        handler.postDelayed(this::refresh, 700);
+        handler.postDelayed(this::refresh, 1800);
     }
 
     private void render() {
@@ -61,11 +74,33 @@ public class GemmaSetupActivity extends Activity {
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-1,-2);
         cp.setMargins(0,dp(10),0,dp(12));
         content.addView(card,cp);
-        card.addView(label("V2.1.0｜Gemini 網路辨識版",17,Color.rgb(15,42,92),true));
-        card.addView(label("已取消 MiniCPM 1.6 GB 本機模型。採購單會先在手機完成方向／透視／去陰影、PP-OCRv6 Small + ML Kit 與固定 8 欄格線定位，再把校正後完整頁面交給 Firebase AI Logic 的 Gemini 3.5 Flash 讀取。",14,Color.rgb(71,85,105),false));
-        card.addView(label("Gemini 回傳固定 JSON 後，APP 仍會再用供應商角色、採購單號、8 欄位置、數量×單價=小計、交貨日期與『以下空白』等規則驗證，避免 AI 自由猜測。",14,Color.rgb(22,101,52),true));
-        card.addView(label("AI 分析仍支援排隊、背景處理、結果直達與失敗重試；資料庫、照片、提醒、知識庫與 Google Drive 備份都保留。",14,Color.rgb(22,101,52),true));
-        card.addView(label("此版本分析需要網路。PP-OCRv6 Small 仍內建，所以即使 Gemini 暫時失敗，原圖與 OCR 證據仍會保留，之後可重新分析。",13,Color.rgb(100,116,139),false));
+        card.addView(label("V2.1.1｜Gemini + Firebase App Check 測試版",17,Color.rgb(15,42,92),true));
+        card.addView(label("已取消 MiniCPM 1.6 GB 本機模型。採購單會先在手機完成方向／透視／去陰影、PP-OCRv6 Small + ML Kit 與固定 8 欄格線定位，再把校正後完整頁面交給 Firebase AI Logic 的 Gemini 3.5 Flash。",14,Color.rgb(71,85,105),false));
+        card.addView(label("Gemini 回傳後，APP 仍會用供應商角色、採購單號、8 欄位置、數量×單價=小計、交貨日期與『以下空白』等規則再驗證。",14,Color.rgb(22,101,52),true));
+
+        LinearLayout appCheckCard = new LinearLayout(this);
+        appCheckCard.setOrientation(LinearLayout.VERTICAL);
+        appCheckCard.setPadding(dp(14),dp(12),dp(14),dp(12));
+        appCheckCard.setBackground(box(Color.rgb(255,251,235),Color.rgb(245,158,11),1));
+        LinearLayout.LayoutParams acp = new LinearLayout.LayoutParams(-1,-2);
+        acp.setMargins(0,0,0,dp(12));
+        content.addView(appCheckCard,acp);
+        appCheckCard.addView(label("Firebase App Check｜第一次只做一次",15,Color.rgb(146,64,14),true));
+        appCheckCard.addView(label("這個 APK 是私下安裝的測試版，所以使用 Firebase 官方 Debug Provider。把下面這組權杖加入 Firebase App Check 後，這支手機之後就能直接使用 Gemini。請不要把權杖傳給其他人。",13,Color.rgb(120,53,15),false));
+        appCheckToken = label("正在產生這支手機的 App Check 權杖…",13,Color.rgb(15,23,42),true);
+        appCheckToken.setTextIsSelectable(true);
+        appCheckCard.addView(appCheckToken);
+
+        copyToken = button("複製 App Check 權杖",Color.rgb(217,119,6));
+        copyToken.setEnabled(false);
+        copyToken.setOnClickListener(v -> copyDebugToken());
+        appCheckCard.addView(copyToken,margins(5,2));
+
+        Button openFirebase = button("開啟 Firebase App Check 設定",Color.rgb(124,58,237));
+        openFirebase.setOnClickListener(v -> openFirebaseConsole());
+        appCheckCard.addView(openFirebase,margins(2,0));
+
+        appCheckCard.addView(label("Firebase Console 操作：找到『採購單追蹤』→ ⋮ →『管理偵錯權杖』→ 新增 → 貼上上面的權杖。完成後回 APP 再分析即可。",12,Color.rgb(120,53,15),false));
 
         status = label("檢查 Firebase 設定中…",14,Color.rgb(71,85,105),false);
         content.addView(status);
@@ -89,16 +124,50 @@ public class GemmaSetupActivity extends Activity {
     }
 
     private void refresh() {
+        FirebaseAppCheckBootstrap.ensure(this);
+        String token = FirebaseAppCheckBootstrap.debugSecret(this);
+        if (token.isEmpty()) {
+            FirebaseAppCheckBootstrap.requestToken(this);
+            appCheckToken.setText("正在產生這支手機的 App Check 權杖…");
+            copyToken.setEnabled(false);
+        } else {
+            appCheckToken.setText(token);
+            copyToken.setEnabled(true);
+        }
+
         AiModelProvider provider = AiModelRegistry.active(this);
         if (provider.isReady(this)) {
-            status.setText("Firebase 專案已連結 ✓\nGemini 3.5 Flash（Firebase AI Logic）已設為主 AI ✓\nPP-OCRv6 Small ONNX 已內建 ✓\nOpenCV 固定 8 欄解析已啟用 ✓\n" + PlayServicesModuleManager.status(this));
+            status.setText("Firebase 專案已連結 ✓\nGemini 3.5 Flash（Firebase AI Logic）已設為主 AI ✓\nFirebase App Check Debug Provider 已載入 ✓\nPP-OCRv6 Small ONNX 已內建 ✓\nOpenCV 固定 8 欄解析已啟用 ✓\n" + PlayServicesModuleManager.status(this));
             status.setTextColor(Color.rgb(22,163,74));
             enter.setEnabled(true);
         } else {
             status.setText("Firebase 尚未初始化。請確認 google-services.json 與 Firebase 專案設定。\n" + PlayServicesModuleManager.status(this));
             status.setTextColor(Color.rgb(220,38,38));
-            enter.setEnabled(true); // Allow database access even if cloud AI is temporarily unavailable.
+            enter.setEnabled(true);
         }
+    }
+
+    private void copyDebugToken() {
+        String token = FirebaseAppCheckBootstrap.debugSecret(this);
+        if (token.isEmpty()) {
+            Toast.makeText(this,"權杖尚未產生，請稍後再試",Toast.LENGTH_SHORT).show();
+            FirebaseAppCheckBootstrap.requestToken(this);
+            handler.postDelayed(this::refresh,700);
+            return;
+        }
+        ClipboardManager cm = (ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("Firebase App Check Debug Token",token));
+        Toast.makeText(this,"App Check 權杖已複製",Toast.LENGTH_SHORT).show();
+    }
+
+    private void openFirebaseConsole() {
+        String url = FirebaseAppCheckBootstrap.consoleUrl();
+        if (url.isEmpty()) {
+            Toast.makeText(this,"找不到 Firebase App Check 網址",Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url))); }
+        catch (Throwable t) { Toast.makeText(this,"無法開啟瀏覽器",Toast.LENGTH_SHORT).show(); }
     }
 
     private void openMain() {
