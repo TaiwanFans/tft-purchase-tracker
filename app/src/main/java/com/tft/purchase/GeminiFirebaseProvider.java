@@ -44,12 +44,12 @@ public final class GeminiFirebaseProvider implements AiModelProvider {
     public void analyze(Context context, String imagePath, String ocrText,
                         AiProgressCallback progress, AiModelCallback callback) {
         try {
-            notify(progress, 5, "準備 Firebase AI Logic 與 Gemini 雲端辨識");
+            emitProgress(progress, 5, "準備 Firebase AI Logic 與 Gemini 雲端辨識");
             FirebaseApp app = FirebaseApp.initializeApp(context.getApplicationContext());
             if (app == null) app = FirebaseApp.getInstance();
 
             Bitmap image = decodeForGemini(imagePath);
-            notify(progress, 15, "整理固定 8 欄格線、PP-OCR 與 ML Kit 證據");
+            emitProgress(progress, 15, "整理固定 8 欄格線、PP-OCR 與 ML Kit 證據");
 
             Schema itemSchema = Schema.obj(
                     Map.of(
@@ -92,12 +92,12 @@ public final class GeminiFirebaseProvider implements AiModelProvider {
                     .addText(promptText)
                     .build();
 
-            notify(progress, 30, "Gemini 正在閱讀完整採購單影像");
+            emitProgress(progress, 30, "Gemini 正在閱讀完整採購單影像");
             ListenableFuture<GenerateContentResponse> future = model.generateContent(prompt);
             Futures.addCallback(future, new FutureCallback<GenerateContentResponse>() {
                 @Override public void onSuccess(GenerateContentResponse result) {
                     try {
-                        notify(progress, 88, "Gemini 已回傳結構化 JSON，準備固定版型驗證");
+                        emitProgress(progress, 88, "Gemini 已回傳結構化 JSON，準備固定版型驗證");
                         String text = result == null ? "" : result.getText();
                         if (text == null || text.trim().isEmpty()) {
                             callback.onFailure("Gemini 沒有回傳可解析的採購單資料");
@@ -184,7 +184,7 @@ public final class GeminiFirebaseProvider implements AiModelProvider {
         return bm;
     }
 
-    private static void notify(AiProgressCallback cb, int percent, String stage) {
+    private static void emitProgress(AiProgressCallback cb, int percent, String stage) {
         if (cb != null) cb.onProgress(percent, stage);
     }
 }
