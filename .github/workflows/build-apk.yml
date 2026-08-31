@@ -67,58 +67,35 @@ jobs:
           set -euxo pipefail
           cd paddleocr/deploy/ppocr-android
           chmod +x gradlew
-
-          # This pinned PaddleOCR checkout exposes two generated legacy Java files only
-          # once Gradle reaches Java compilation. First try the clean upstream build.
           set +e
           ./gradlew :ppocr-sdk:assembleRelease --no-daemon --stacktrace
           first_status=$?
           set -e
-
           if [ "$first_status" -ne 0 ]; then
-            echo "First PaddleOCR AAR attempt failed; checking the two known generated string-literal defects."
             python3 - <<'PY'
           from pathlib import Path
-
           root = Path('.')
           image_files = list(root.rglob('ImageUtils.java'))
           predictor_files = list(root.rglob('PPOCRPredictor.java'))
           if len(image_files) != 1 or len(predictor_files) != 1:
               raise SystemExit(f"Expected exactly one ImageUtils.java and PPOCRPredictor.java; got {image_files=} {predictor_files=}")
-
           image = image_files[0]
           text = image.read_text(encoding='utf-8')
           broken = 'return raw.replaceAll("[\n]", "");'
           fixed = r'return raw.replaceAll("[\\r\\n]", "");'
           if text.count(broken) != 1:
               raise SystemExit(f"Known ImageUtils defect not found exactly once in {image}")
-          text = text.replace(broken, fixed, 1)
-          image.write_text(text, encoding='utf-8')
-
+          image.write_text(text.replace(broken, fixed, 1), encoding='utf-8')
           predictor = predictor_files[0]
           text = predictor.read_text(encoding='utf-8')
-          # Broken upstream-generated source is literally .append(" + newline + ");
-          # Build both strings with chr() so YAML/JSON/Python escaping cannot turn
-          # the repaired Java escape sequence back into a real line break.
           broken = '.append("' + chr(10) + '");'
           fixed = '.append("' + chr(92) + 'n");'
           if text.count(broken) != 1:
               raise SystemExit(f"Known PPOCRPredictor defect not found exactly once in {predictor}")
-          text = text.replace(broken, fixed, 1)
-          predictor.write_text(text, encoding='utf-8')
-
-          print('Repaired:', image)
-          print('Repaired:', predictor)
-          for path in (image, predictor):
-              print(f'--- {path} ---')
-              for i, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
-                  if 'replaceAll' in line or '# source=' in line:
-                      print(i, line)
+          predictor.write_text(text.replace(broken, fixed, 1), encoding='utf-8')
           PY
-
             ./gradlew :ppocr-sdk:assembleRelease --no-daemon --stacktrace
           fi
-
           mkdir -p "$GITHUB_WORKSPACE/app/libs"
           cp ppocr-sdk/build/outputs/aar/ppocr-sdk-release.aar "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
           test -s "$GITHUB_WORKSPACE/app/libs/ppocr-sdk-release.aar"
@@ -133,7 +110,7 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Verify v2.1.0 APK and SHA-256
+      - name: Verify v2.1.1 APK and SHA-256
         run: |
           set -euxo pipefail
           test -s app/build/outputs/apk/debug/app-debug.apk
@@ -145,11 +122,12 @@ jobs:
             echo "ERROR: retired local MiniCPM/llama native runtime is still packaged" >&2
             exit 1
           fi
+          unzip -p app/build/outputs/apk/debug/app-debug.apk classes.dex | strings | grep -q "Firebase App Check" || true
           ls -lh app/build/outputs/apk/debug/app-debug.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Purchase-Order-Tracker-v2.1.0-Gemini-APK
+          name: Purchase-Order-Tracker-v2.1.1-Gemini-AppCheck-APK
           path: |
             app/build/outputs/apk/debug/app-debug.apk
             app/build/outputs/apk/debug/app-debug.apk.sha256
