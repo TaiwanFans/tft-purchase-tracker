@@ -22,8 +22,10 @@ import android.widget.Toast;
 
 import com.google.firebase.FirebaseApp;
 
-/** v2.1.2 non-technical Firebase / Gemini connection helper for privately installed test APKs. */
+/** v2.1.3 non-technical Firebase / Gemini connection helper for privately installed test APKs. */
 public class FirebaseGeminiConnectionActivity extends Activity {
+    private static final String PREFS = "tft_settings";
+    private static final String KEY_VERIFIED = "firebase_gemini_verified";
     private final Handler handler = new Handler(Looper.getMainLooper());
     private TextView projectInfo;
     private TextView appCheckStatus;
@@ -34,6 +36,11 @@ public class FirebaseGeminiConnectionActivity extends Activity {
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        boolean forceSetup = getIntent() != null && getIntent().getBooleanExtra("force_connection_setup", false);
+        if (!forceSetup && getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean(KEY_VERIFIED, false)) {
+            openMain();
+            return;
+        }
         AiModelRegistry.setActive(this, AiModelRegistry.GEMINI_FIREBASE);
         FirebaseAppCheckBootstrap.ensure(this);
         FirebaseAppCheckBootstrap.requestToken(this);
@@ -59,8 +66,8 @@ public class FirebaseGeminiConnectionActivity extends Activity {
         LinearLayout titleText = new LinearLayout(this);
         titleText.setOrientation(LinearLayout.VERTICAL);
         titleText.setPadding(dp(12), 0, 0, 0);
-        titleText.addView(label("採購單追蹤", 24, Color.rgb(15, 42, 92), true));
-        titleText.addView(label("Firebase / Gemini 連線", 15, Color.rgb(37, 99, 235), true));
+        titleText.addView(label("採購單追蹤", 25, Color.rgb(15, 42, 92), true));
+        titleText.addView(label("Firebase / Gemini 連線設定", 14, Color.rgb(37, 99, 235), true));
         titleRow.addView(titleText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
         root.addView(titleRow);
 
@@ -73,8 +80,8 @@ public class FirebaseGeminiConnectionActivity extends Activity {
 
         LinearLayout infoCard = card(Color.WHITE, Color.rgb(37, 99, 235));
         content.addView(infoCard, cardParams(10, 12));
-        infoCard.addView(label("V2.1.2｜完整品名 + Gemini + Firebase App Check", 17, Color.rgb(15, 42, 92), true));
-        infoCard.addView(label("品項追蹤改為直接顯示完整品名，尺寸／型號等規格會併入品名，例如『42寸鐵框』。PP-OCRv6 Small、ML Kit、OpenCV 與固定 8 欄解析照常保留。", 13, Color.rgb(71, 85, 105), false));
+        infoCard.addView(label("V2.1.3｜完整品名 + 全新追貨介面", 18, Color.rgb(15, 42, 92), true));
+        infoCard.addView(label("尺寸／型號等規格會直接併入完整品名，例如『42寸鐵框』；首頁與提醒頁也改成以『品項』為主角。辨識仍保留 PP-OCRv6 Small、ML Kit、OpenCV、固定 8 欄與 Gemini。", 13, Color.rgb(71, 85, 105), false));
         projectInfo = label("正在讀取 Firebase 專案資訊…", 14, Color.rgb(15, 23, 42), true);
         infoCard.addView(projectInfo);
 
@@ -100,11 +107,11 @@ public class FirebaseGeminiConnectionActivity extends Activity {
 
         LinearLayout testCard = card(Color.rgb(240, 253, 244), Color.rgb(34, 197, 94));
         content.addView(testCard, cardParams(0, 12));
-        testCard.addView(label("一鍵確認 Gemini 是否真的可用", 15, Color.rgb(22, 101, 52), true));
+        testCard.addView(label("最後只要按一次測試", 15, Color.rgb(22, 101, 52), true));
         testConnection = button("測試 Gemini 連線", Color.rgb(22, 163, 74));
         testConnection.setOnClickListener(v -> testGemini());
         testCard.addView(testConnection, margins(3, 2));
-        connectionResult = label("尚未測試。第一次請先把上面的 Debug 權杖加入 Firebase Console。", 13, Color.rgb(71, 85, 105), false);
+        connectionResult = label("尚未測試。第一次請先把上面的 Debug 權杖加入 Firebase Console。測試成功後，以後開 APP 會直接進入追貨首頁。", 13, Color.rgb(71, 85, 105), false);
         testCard.addView(connectionResult);
 
         LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
@@ -167,7 +174,11 @@ public class FirebaseGeminiConnectionActivity extends Activity {
             testConnection.setText("測試 Gemini 連線");
             connectionResult.setText(message);
             connectionResult.setTextColor(success ? Color.rgb(22, 163, 74) : Color.rgb(220, 38, 38));
-            if (success) appCheckStatus.setText("App Check 狀態：Gemini 實際請求已通過 ✓");
+            if (success) {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_VERIFIED, true).apply();
+                appCheckStatus.setText("App Check 狀態：Gemini 實際請求已通過 ✓");
+                Toast.makeText(this, "連線成功。之後開 APP 會直接進入採購追蹤首頁。", Toast.LENGTH_LONG).show();
+            }
         }));
     }
 
@@ -198,7 +209,7 @@ public class FirebaseGeminiConnectionActivity extends Activity {
     }
 
     private void openMain() {
-        Intent intent = new Intent(this, EnhancedAiMainActivity.class);
+        Intent intent = new Intent(this, PolishedAiMainActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(intent);
         finish();
@@ -207,7 +218,7 @@ public class FirebaseGeminiConnectionActivity extends Activity {
     private LinearLayout card(int fill, int stroke) {
         LinearLayout view = new LinearLayout(this);
         view.setOrientation(LinearLayout.VERTICAL);
-        view.setPadding(dp(14), dp(12), dp(14), dp(12));
+        view.setPadding(dp(15), dp(13), dp(15), dp(13));
         view.setBackground(box(fill, stroke, 1));
         return view;
     }
@@ -224,7 +235,7 @@ public class FirebaseGeminiConnectionActivity extends Activity {
         v.setTextSize(sp);
         v.setTextColor(color);
         v.setGravity(Gravity.START);
-        v.setLineSpacing(0, 1.08f);
+        v.setLineSpacing(0, 1.10f);
         if (bold) v.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         v.setPadding(0, dp(5), 0, dp(5));
         return v;
@@ -237,17 +248,17 @@ public class FirebaseGeminiConnectionActivity extends Activity {
         b.setTextSize(15);
         b.setTextColor(Color.WHITE);
         b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        b.setBackground(box(color, Color.rgb(15, 23, 42), 1));
-        b.setPadding(dp(12), dp(9), dp(12), dp(9));
-        b.setMinHeight(dp(48));
+        b.setBackground(box(color, color, 0));
+        b.setPadding(dp(12), dp(10), dp(12), dp(10));
+        b.setMinHeight(dp(50));
         return b;
     }
 
     private GradientDrawable box(int fill, int stroke, int width) {
         GradientDrawable g = new GradientDrawable();
         g.setColor(fill);
-        g.setStroke(dp(width), stroke);
-        g.setCornerRadius(dp(10));
+        if (width > 0) g.setStroke(dp(width), stroke);
+        g.setCornerRadius(dp(16));
         return g;
     }
 
