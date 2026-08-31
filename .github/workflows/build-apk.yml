@@ -42,9 +42,12 @@ jobs:
           from pathlib import Path
           import re
 
-          path = Path('paddleocr/deploy/ppocr-android/ppocr-sdk/src/main/java/com/baidu/paddle/lite/demo/ocr/PPOCRPredictor.java')
+          matches = list(Path('paddleocr').rglob('PPOCRPredictor.java'))
+          print('PPOCRPredictor candidates:', [str(p) for p in matches])
+          if len(matches) != 1:
+              raise SystemExit(f'Expected exactly one PPOCRPredictor.java, found {len(matches)}')
+          path = matches[0]
           text = path.read_text(encoding='utf-8')
-          original = text
 
           text, det_count = re.subn(
               r'throw\s+new\s+RuntimeException\(\s*"Detection model inference failed\s*"\s*\+\s*safeErrorMessage\(e\),\s*e\s*\);',
@@ -62,11 +65,11 @@ jobs:
           if det_count != 1 or rec_count != 1:
               print('det_count=', det_count, 'rec_count=', rec_count)
               start = max(0, text.find('Detection model inference failed') - 250)
-              print(text[start:start+1200])
+              print(text[start:start+1400])
               raise SystemExit('Pinned PaddleOCR source shape changed; refusing a blind patch')
 
           path.write_text(text, encoding='utf-8')
-          print('Patched upstream Java literals:', det_count, rec_count)
+          print('Patched:', path, 'counts=', det_count, rec_count)
           PY
 
       - name: Download PP-OCRv6 Small detection ONNX
