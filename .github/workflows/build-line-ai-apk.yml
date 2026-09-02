@@ -39,29 +39,23 @@ jobs:
         with:
           gradle-version: '9.5.1'
 
-      - name: Restore and adapt Android project
+      - name: Restore v0.2 Android project
         run: |
-          cat line-ai-build/source.part00 line-ai-build/source.part01 line-ai-build/source.part02 line-ai-build/source.part03 > line-ai-build/source.b64
-          base64 --decode line-ai-build/source.b64 > line-ai-build/source.tar.xz
-          tar -xJf line-ai-build/source.tar.xz
-          test -f quanyi_line_ai_android/settings.gradle.kts
-          test -f quanyi_line_ai_android/app/build.gradle.kts
-          patch -p0 < line-ai-build/fix-mlkit.patch
-          sed -i 's/compileSdk = 37/compileSdk = 36/' quanyi_line_ai_android/app/build.gradle.kts
-          sed -i 's/targetSdk = 37/targetSdk = 36/' quanyi_line_ai_android/app/build.gradle.kts
-          sed -i 's/compose-bom:2026.08.00/compose-bom:2026.04.01/' quanyi_line_ai_android/app/build.gradle.kts
-          sed -i 's/activity-compose:1.13.0/activity-compose:1.11.0/' quanyi_line_ai_android/app/build.gradle.kts
-          sed -i 's/lifecycle-runtime-ktx:2.11.0/lifecycle-runtime-ktx:2.10.0/' quanyi_line_ai_android/app/build.gradle.kts
-          sed -i 's/lifecycle-runtime-compose:2.11.0/lifecycle-runtime-compose:2.10.0/' quanyi_line_ai_android/app/build.gradle.kts
+          cat line-ai-build/v02/source.part00 line-ai-build/v02/source.part01 line-ai-build/v02/source.part02 line-ai-build/v02/source.part03 line-ai-build/v02/source.part04 > line-ai-build/v02/source.b64
+          base64 --decode line-ai-build/v02/source.b64 > line-ai-build/v02/source.tar.xz
+          tar -xJf line-ai-build/v02/source.tar.xz
+          test -f quanyi_v02/settings.gradle.kts
+          test -f quanyi_v02/app/build.gradle.kts
+          grep -q 'versionName = "0.2.0"' quanyi_v02/app/build.gradle.kts
 
-      - name: Build debug APK
-        working-directory: quanyi_line_ai_android
+      - name: Build v0.2 debug APK
+        working-directory: quanyi_v02
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
-      - name: Upload APK
+      - name: Upload v0.2 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Quanyi-LINE-AI-Pixel10ProXL-APK
-          path: quanyi_line_ai_android/app/build/outputs/apk/debug/app-debug.apk
+          name: Quanyi-LINE-AI-Group-Control-v0.2-APK
+          path: quanyi_v02/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
