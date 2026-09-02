@@ -7,11 +7,11 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.tft.purchase'
-        minSdk 23
+        applicationId 'com.tft.lineai'
+        minSdk 26
         targetSdk 35
         versionCode 1
-        versionName '1.0.0'
+        versionName '0.1.0-mvp'
     }
 
     buildTypes {
@@ -27,5 +27,4 @@ android {
 }
 
 dependencies {
-    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
 }
