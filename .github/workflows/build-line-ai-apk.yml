@@ -46,6 +46,7 @@ jobs:
           tar -xJf line-ai-build/source.tar.xz
           test -f quanyi_line_ai_android/settings.gradle.kts
           test -f quanyi_line_ai_android/app/build.gradle.kts
+          patch -p0 < line-ai-build/fix-mlkit.patch
           sed -i 's/compileSdk = 37/compileSdk = 36/' quanyi_line_ai_android/app/build.gradle.kts
           sed -i 's/targetSdk = 37/targetSdk = 36/' quanyi_line_ai_android/app/build.gradle.kts
           sed -i 's/compose-bom:2026.08.00/compose-bom:2026.04.01/' quanyi_line_ai_android/app/build.gradle.kts
