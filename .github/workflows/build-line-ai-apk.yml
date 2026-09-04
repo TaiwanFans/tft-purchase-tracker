@@ -20,16 +20,18 @@ jobs:
       - name: Checkout temporary build branch
         uses: actions/checkout@v4
 
-      - name: Diagnose source chunk integrity
-        run: |
-          wc -c line-ai-build/v04safe/source.part*
-          sha256sum line-ai-build/v04safe/source.part*
-          cat line-ai-build/v04safe/source.part00 line-ai-build/v04safe/source.part01 line-ai-build/v04safe/source.part02 line-ai-build/v04safe/source.part03 line-ai-build/v04safe/source.part04 line-ai-build/v04safe/source.part05 line-ai-build/v04safe/source.part06 line-ai-build/v04safe/source.part07 > line-ai-build/v04safe/source.b64
-          sha256sum line-ai-build/v04safe/source.b64
-
       - name: Verify v0.4 source package
         run: |
-          echo '690b14e9ddd75b05c9c952175af14b323070106432666edbe9500e3ee14e20a5  line-ai-build/v04safe/source.b64' | sha256sum -c -
+          test "$(wc -c < line-ai-build/v04safe/source.part00)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part01)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part02)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part03)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part04)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part05)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part06)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part07)" -eq 5784
+          cat line-ai-build/v04safe/source.part00 line-ai-build/v04safe/source.part01 line-ai-build/v04safe/source.part02 line-ai-build/v04safe/source.part03 line-ai-build/v04safe/source.part04 line-ai-build/v04safe/source.part05 line-ai-build/v04safe/source.part06 line-ai-build/v04safe/source.part07 > line-ai-build/v04safe/source.b64
+          echo '1b5ea31f2b50d817ad627fd3962d37280ec8c75786e3ab8129d0f1de9a1ec36d  line-ai-build/v04safe/source.b64' | sha256sum -c -
           base64 --decode line-ai-build/v04safe/source.b64 > line-ai-build/v04safe/source.tar.xz
           echo 'c37a4808f302f9dcacf58c45ee1c9fdb34d469baf858e3ceb0ce0424a32b0a37  line-ai-build/v04safe/source.tar.xz' | sha256sum -c -
           tar -xJf line-ai-build/v04safe/source.tar.xz
@@ -40,35 +42,29 @@ jobs:
           test -f v04work/app/src/main/java/tw/com/tft/lineai/backup/BackupManager.kt
 
       - name: Set up JDK 17
-        if: success()
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        if: success()
         uses: android-actions/setup-android@v3
 
       - name: Install Android API 36 SDK
-        if: success()
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
 
       - name: Set up Gradle
-        if: success()
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.5.1'
 
       - name: Build v0.4 debug APK
-        if: success()
         working-directory: v04work
         run: gradle :app:assembleDebug --stacktrace --no-daemon
 
       - name: Upload v0.4 APK
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Quanyi-LINE-AI-Work-Control-v0.4-Backup-APK
