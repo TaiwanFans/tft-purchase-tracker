@@ -1,4 +1,4 @@
-name: Build LINE AI Android APK
+name: Export verified v0.5 source
 
 on:
   workflow_dispatch:
@@ -6,21 +6,19 @@ on:
     branches:
       - temp-line-ai-apk-build
     paths:
-      - 'line-ai-build/v05chunks/**'
       - '.github/workflows/build-line-ai-apk.yml'
 
 permissions:
   contents: read
 
 jobs:
-  build:
+  export:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
     steps:
       - name: Checkout temporary build branch
         uses: actions/checkout@v4
 
-      - name: Verify v0.5 source chunks
+      - name: Reconstruct and verify v0.5 source
         run: |
           test "$(wc -c < line-ai-build/v05chunks/source.part00)" -eq 6000
           test "$(wc -c < line-ai-build/v05chunks/source.part01)" -eq 6000
@@ -32,104 +30,20 @@ jobs:
           test "$(wc -c < line-ai-build/v05chunks/source.part07)" -eq 6000
           test "$(wc -c < line-ai-build/v05chunks/source.part08)" -eq 6000
           test "$(wc -c < line-ai-build/v05chunks/source.part09)" -eq 2288
-          echo 'eebf46ae80ac2640b34ec12350d4d0c03e0d89bdfb943b4223b0233dcf38dbfe  line-ai-build/v05chunks/source.part00' | sha256sum -c -
-          echo 'c4b093c0efd7bc9535922cf4deb9aa47757f6fffdb26dd4d49d599e743bd29fb  line-ai-build/v05chunks/source.part01' | sha256sum -c -
-          echo '810a059d9ac3b964ba32cc9bdc75e023f3561ea54529ca809530623db5c69b24  line-ai-build/v05chunks/source.part02' | sha256sum -c -
-          echo 'ac723fbd7109a7adc487b1a10a833f10b427cef7dfba63fc6610b79686890941  line-ai-build/v05chunks/source.part03' | sha256sum -c -
-          echo '589033475383b85ea1dd5f78867b373327e1d23efaf472a83b82cfc6363881fd  line-ai-build/v05chunks/source.part04' | sha256sum -c -
-          echo '519f9be24a1eb1370cd5f0053eaabfe5911c7e605567f49e596afd76023df16f  line-ai-build/v05chunks/source.part05' | sha256sum -c -
-          echo '84a261423b244c26282a994c2cd0b96075aae242f1bf4489a441013ace956dcb  line-ai-build/v05chunks/source.part06' | sha256sum -c -
-          echo '3036edf9b94f8ba0959eb461433c23fb39de69b8bc51a25f59c8724007e4a115  line-ai-build/v05chunks/source.part07' | sha256sum -c -
-          echo 'f1bf7bfeff1d4cd4c9bf352c8c79204eb1d3a507c66dc360fac037d754c68872  line-ai-build/v05chunks/source.part08' | sha256sum -c -
-          echo 'f32431942594bec997687ca974b3b60ce8a6247edbda773c2b3ee92ea933dcdc  line-ai-build/v05chunks/source.part09' | sha256sum -c -
           cat line-ai-build/v05chunks/source.part00 line-ai-build/v05chunks/source.part01 line-ai-build/v05chunks/source.part02 line-ai-build/v05chunks/source.part03 line-ai-build/v05chunks/source.part04 line-ai-build/v05chunks/source.part05 line-ai-build/v05chunks/source.part06 line-ai-build/v05chunks/source.part07 line-ai-build/v05chunks/source.part08 line-ai-build/v05chunks/source.part09 > line-ai-build/v05chunks/source.b64
           echo '7c878db5ce0f41b7fa7f9bfe193e438b93ad267ffc021fbbf9cc1d504ee05f0e  line-ai-build/v05chunks/source.b64' | sha256sum -c -
           base64 --decode line-ai-build/v05chunks/source.b64 > line-ai-build/v05chunks/source.tar.xz
           echo '2b82f1c4dbec48f3cbd6c203691d5c5be5d067550d829ebc1c4afb7be391b48a  line-ai-build/v05chunks/source.tar.xz' | sha256sum -c -
           tar -xJf line-ai-build/v05chunks/source.tar.xz
-          test -f v04work/settings.gradle.kts
-          test -f v04work/app/build.gradle.kts
           grep -q 'versionCode = 5' v04work/app/build.gradle.kts
-          grep -q 'versionName = "0.5.0"' v04work/app/build.gradle.kts
           grep -q 'version = 3' v04work/app/src/main/java/tw/com/tft/lineai/data/AppDatabase.kt
-          test -f v04work/app/src/main/java/tw/com/tft/lineai/backup/BackupManager.kt
-          test -f v04work/app/src/main/java/tw/com/tft/lineai/domain/IdentityManager.kt
-          test -f v04work/app/src/main/java/tw/com/tft/lineai/domain/ReviewManager.kt
-          grep -q 'BACKUP_SCHEMA = 2' v04work/app/src/main/java/tw/com/tft/lineai/backup/BackupManager.kt
+          zip -qr /tmp/quanyi-v05-verified-source.zip v04work
+          sha256sum /tmp/quanyi-v05-verified-source.zip
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android API 36 SDK
-        run: |
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.5.1'
-
-      - name: Compile v0.5 release APK
-        working-directory: v04work
-        run: gradle :app:assembleRelease --stacktrace --no-daemon
-
-      - name: Verify v0.5 package identity
-        run: |
-          APK=v04work/app/build/outputs/apk/release/app-release-unsigned.apk
-          test -f "$APK"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/v05-badging.txt
-          grep -q "package: name='tw.com.tft.lineai' versionCode='5' versionName='0.5.0'" /tmp/v05-badging.txt
-          cp "$APK" /tmp/quanyi-v0.5-unsigned.apk
-
-      - name: Build higher-version v0.5.1 update probe
-        working-directory: v04work
-        run: |
-          sed -i 's/versionCode = 5/versionCode = 6/' app/build.gradle.kts
-          sed -i 's/versionName = "0.5.0"/versionName = "0.5.1"/' app/build.gradle.kts
-          gradle :app:assembleRelease --stacktrace --no-daemon
-
-      - name: Verify v0.5.1 update package identity
-        run: |
-          APK=v04work/app/build/outputs/apk/release/app-release-unsigned.apk
-          test -f "$APK"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/v051-badging.txt
-          grep -q "package: name='tw.com.tft.lineai' versionCode='6' versionName='0.5.1'" /tmp/v051-badging.txt
-          cp "$APK" /tmp/quanyi-v0.5.1-unsigned.apk
-
-      - name: Prepare offline signing tool
-        run: |
-          mkdir -p signing-tools/lib
-          cp "$ANDROID_HOME/build-tools/36.0.0/apksigner" signing-tools/
-          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tools/lib/
-          chmod +x signing-tools/apksigner
-
-      - name: Upload v0.5 unsigned release APK
+      - name: Upload verified v0.5 source
         uses: actions/upload-artifact@v4
         with:
-          name: Quanyi-LINE-AI-v0.5-Unsigned-Release-Probe
-          path: /tmp/quanyi-v0.5-unsigned.apk
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload v0.5.1 unsigned update probe
-        uses: actions/upload-artifact@v4
-        with:
-          name: Quanyi-LINE-AI-v0.5.1-Unsigned-Update-Probe
-          path: /tmp/quanyi-v0.5.1-unsigned.apk
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Upload apksigner tool
-        uses: actions/upload-artifact@v4
-        with:
-          name: Android-apksigner-36-Probe
-          path: signing-tools
+          name: Quanyi-LINEOUT-v0.5-Verified-Source
+          path: /tmp/quanyi-v05-verified-source.zip
           if-no-files-found: error
           retention-days: 7
