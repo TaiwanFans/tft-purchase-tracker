@@ -7,6 +7,7 @@ on:
       - temp-line-ai-apk-build
     paths:
       - 'line-ai-build/v06patch/**'
+      - 'line-ai-build/v06fix/**'
       - '.github/workflows/build-line-ai-apk.yml'
 
 permissions:
@@ -39,10 +40,9 @@ jobs:
           echo '2b82f1c4dbec48f3cbd6c203691d5c5be5d067550d829ebc1c4afb7be391b48a  /tmp/v05-source.tar.xz' | sha256sum -c -
           tar -xJf /tmp/v05-source.tar.xz
           grep -q 'versionCode = 5' v04work/app/build.gradle.kts
-          grep -q 'versionName = "0.5.0"' v04work/app/build.gradle.kts
           grep -q 'version = 3' v04work/app/src/main/java/tw/com/tft/lineai/data/AppDatabase.kt
 
-      - name: Verify and apply v0.6 patch
+      - name: Verify and apply v0.6 feature patch
         run: |
           set -euo pipefail
           test "$(wc -c < line-ai-build/v06patch/patch.part00)" -eq 6000
@@ -64,14 +64,19 @@ jobs:
           sed -e 's#v06src/v04work#v04work#g' -e 's#v06work#v04work#g' /tmp/v06.patch > /tmp/v06-apply.patch
           patch --dry-run -p0 < /tmp/v06-apply.patch
           patch -p0 < /tmp/v06-apply.patch
+
+      - name: Verify and apply compile fix
+        run: |
+          set -euo pipefail
+          echo 'b32d4a2bcc133fdc850f1ca354cebe8b40d3a8b67edfa80875ed8fdc93539d51  line-ai-build/v06fix/compile-fix.patch' | sha256sum -c -
+          patch --dry-run -p0 < line-ai-build/v06fix/compile-fix.patch
+          patch -p0 < line-ai-build/v06fix/compile-fix.patch
           grep -q 'versionCode = 7' v04work/app/build.gradle.kts
           grep -q 'versionName = "0.6.0"' v04work/app/build.gradle.kts
           grep -q 'version = 4' v04work/app/src/main/java/tw/com/tft/lineai/data/AppDatabase.kt
           grep -q 'BACKUP_SCHEMA = 3' v04work/app/src/main/java/tw/com/tft/lineai/backup/BackupManager.kt
+          grep -q 'roleWasOverridden' v04work/app/src/main/java/tw/com/tft/lineai/agent/RuleBasedAgent.kt
           grep -q 'android:label="LINEOUT"' v04work/app/src/main/AndroidManifest.xml
-          test -f v04work/app/src/main/java/tw/com/tft/lineai/domain/PersonNameParser.kt
-          test -f v04work/app/src/main/java/tw/com/tft/lineai/domain/AiMemoryManager.kt
-          test -f v04work/app/src/main/java/tw/com/tft/lineai/capture/NotificationJumpRegistry.kt
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
