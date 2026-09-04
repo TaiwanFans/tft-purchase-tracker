@@ -1,0 +1,39 @@
+--- v04work/app/src/main/java/tw/com/tft/lineai/agent/RuleBasedAgent.kt
++++ v04work/app/src/main/java/tw/com/tft/lineai/agent/RuleBasedAgent.kt
+@@ -57,7 +57,7 @@
+                 event, sender, conversation, CaseStatus.OTHER,
+                 "純貼圖/簡短確認，不需回覆。", "不需處理",
+                 false, null, "本機規則：噪音/確認訊息", 0.90,
+-                CaseType.OTHER, WaitingFor.NONE, dueAt, assignedTo, false, role
++                CaseType.OTHER, WaitingFor.NONE, dueAt, assignedTo, false, role, roleOverride != null
+             )
+         }
+ 
+@@ -117,7 +117,7 @@
+         return result(
+             event, sender, conversation, decision.status, summary, decision.action,
+             draft != null, draft, "v0.6 角色＋案件流程規則", confidence(event, decision.status),
+-            decision.caseType, decision.waitingFor, dueAt, assignedTo, decision.stateSignal, role
++            decision.caseType, decision.waitingFor, dueAt, assignedTo, decision.stateSignal, role, roleOverride != null
+         )
+     }
+ 
+@@ -196,7 +196,8 @@
+         dueAt: Long?,
+         assignedTo: String?,
+         stateSignal: Boolean,
+-        role: SpeakerRole
++        role: SpeakerRole,
++        roleWasOverridden: Boolean = false
+     ): AiAnalysis = AiAnalysis(
+         customerName = sender,
+         conversationName = conversation,
+@@ -214,7 +215,7 @@
+         stateSignal = stateSignal,
+         speakerRole = role,
+         identityConfidence = when {
+-            roleOverride != null -> 1.0
++            roleWasOverridden -> 1.0
+             role == SpeakerRole.INTERNAL -> 0.99
+             role == SpeakerRole.UNKNOWN -> 0.35
+             PersonNameParser.parse(sender)?.title != null -> 0.82
