@@ -2,12 +2,6 @@ name: Build LINE AI Android APK
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - temp-line-ai-apk-build
-    paths:
-      - 'line-ai-build/**'
-      - '.github/workflows/build-line-ai-apk.yml'
 
 permissions:
   contents: read
@@ -41,8 +35,9 @@ jobs:
 
       - name: Restore v0.3 Android project
         run: |
-          cat line-ai-build/v03/source.part00 line-ai-build/v03/source.part01 line-ai-build/v03/source.part0203 line-ai-build/v03/source.part0405 line-ai-build/v03/source.part06 > line-ai-build/v03/source.b64
+          cat line-ai-build/v03/source.part00 line-ai-build/v03/source.part01 line-ai-build/v03/source.part02 line-ai-build/v03/source.part03 line-ai-build/v03/source.part04 line-ai-build/v03/source.part05 line-ai-build/v03/source.part06 > line-ai-build/v03/source.b64
           base64 --decode line-ai-build/v03/source.b64 > line-ai-build/v03/source.tar.xz
+          echo '67cd6f9e3a69eb78972bd1a77b10924dd985ca07beaacaaddcf6c11a7b554987  line-ai-build/v03/source.tar.xz' | sha256sum -c -
           tar -xJf line-ai-build/v03/source.tar.xz
           test -f quanyi_v03/settings.gradle.kts
           test -f quanyi_v03/app/build.gradle.kts
