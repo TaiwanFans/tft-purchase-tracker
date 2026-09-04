@@ -6,7 +6,7 @@ on:
     branches:
       - temp-line-ai-apk-build
     paths:
-      - 'line-ai-build/v04/**'
+      - 'line-ai-build/v04safe/**'
       - '.github/workflows/build-line-ai-apk.yml'
 
 permissions:
@@ -41,9 +41,19 @@ jobs:
 
       - name: Restore and verify v0.4 Android project
         run: |
-          base64 --decode line-ai-build/v04/source.b64 > line-ai-build/v04/source.tar.xz
-          echo 'c37a4808f302f9dcacf58c45ee1c9fdb34d469baf858e3ceb0ce0424a32b0a37  line-ai-build/v04/source.tar.xz' | sha256sum -c -
-          tar -xJf line-ai-build/v04/source.tar.xz
+          test "$(wc -c < line-ai-build/v04safe/source.part00)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part01)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part02)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part03)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part04)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part05)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part06)" -eq 6000
+          test "$(wc -c < line-ai-build/v04safe/source.part07)" -eq 5784
+          cat line-ai-build/v04safe/source.part00 line-ai-build/v04safe/source.part01 line-ai-build/v04safe/source.part02 line-ai-build/v04safe/source.part03 line-ai-build/v04safe/source.part04 line-ai-build/v04safe/source.part05 line-ai-build/v04safe/source.part06 line-ai-build/v04safe/source.part07 > line-ai-build/v04safe/source.b64
+          echo '690b14e9ddd75b05c9c952175af14b323070106432666edbe9500e3ee14e20a5  line-ai-build/v04safe/source.b64' | sha256sum -c -
+          base64 --decode line-ai-build/v04safe/source.b64 > line-ai-build/v04safe/source.tar.xz
+          echo 'c37a4808f302f9dcacf58c45ee1c9fdb34d469baf858e3ceb0ce0424a32b0a37  line-ai-build/v04safe/source.tar.xz' | sha256sum -c -
+          tar -xJf line-ai-build/v04safe/source.tar.xz
           test -f v04work/settings.gradle.kts
           test -f v04work/app/build.gradle.kts
           grep -q 'versionName = "0.4.0"' v04work/app/build.gradle.kts
