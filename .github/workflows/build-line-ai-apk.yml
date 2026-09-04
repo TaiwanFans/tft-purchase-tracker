@@ -1,4 +1,4 @@
-name: Export verified v0.5 source
+name: Build LINEOUT v0.6 Android APK
 
 on:
   workflow_dispatch:
@@ -6,20 +6,23 @@ on:
     branches:
       - temp-line-ai-apk-build
     paths:
+      - 'line-ai-build/v06patch/**'
       - '.github/workflows/build-line-ai-apk.yml'
 
 permissions:
   contents: read
 
 jobs:
-  export:
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout temporary build branch
         uses: actions/checkout@v4
 
-      - name: Reconstruct and verify v0.5 source
+      - name: Reconstruct verified v0.5 source
         run: |
+          set -euo pipefail
           test "$(wc -c < line-ai-build/v05chunks/source.part00)" -eq 6000
           test "$(wc -c < line-ai-build/v05chunks/source.part01)" -eq 6000
           test "$(wc -c < line-ai-build/v05chunks/source.part02)" -eq 6000
@@ -30,20 +33,101 @@ jobs:
           test "$(wc -c < line-ai-build/v05chunks/source.part07)" -eq 6000
           test "$(wc -c < line-ai-build/v05chunks/source.part08)" -eq 6000
           test "$(wc -c < line-ai-build/v05chunks/source.part09)" -eq 2288
-          cat line-ai-build/v05chunks/source.part00 line-ai-build/v05chunks/source.part01 line-ai-build/v05chunks/source.part02 line-ai-build/v05chunks/source.part03 line-ai-build/v05chunks/source.part04 line-ai-build/v05chunks/source.part05 line-ai-build/v05chunks/source.part06 line-ai-build/v05chunks/source.part07 line-ai-build/v05chunks/source.part08 line-ai-build/v05chunks/source.part09 > line-ai-build/v05chunks/source.b64
-          echo '7c878db5ce0f41b7fa7f9bfe193e438b93ad267ffc021fbbf9cc1d504ee05f0e  line-ai-build/v05chunks/source.b64' | sha256sum -c -
-          base64 --decode line-ai-build/v05chunks/source.b64 > line-ai-build/v05chunks/source.tar.xz
-          echo '2b82f1c4dbec48f3cbd6c203691d5c5be5d067550d829ebc1c4afb7be391b48a  line-ai-build/v05chunks/source.tar.xz' | sha256sum -c -
-          tar -xJf line-ai-build/v05chunks/source.tar.xz
+          cat line-ai-build/v05chunks/source.part00 line-ai-build/v05chunks/source.part01 line-ai-build/v05chunks/source.part02 line-ai-build/v05chunks/source.part03 line-ai-build/v05chunks/source.part04 line-ai-build/v05chunks/source.part05 line-ai-build/v05chunks/source.part06 line-ai-build/v05chunks/source.part07 line-ai-build/v05chunks/source.part08 line-ai-build/v05chunks/source.part09 > /tmp/v05-source.b64
+          echo '7c878db5ce0f41b7fa7f9bfe193e438b93ad267ffc021fbbf9cc1d504ee05f0e  /tmp/v05-source.b64' | sha256sum -c -
+          base64 --decode /tmp/v05-source.b64 > /tmp/v05-source.tar.xz
+          echo '2b82f1c4dbec48f3cbd6c203691d5c5be5d067550d829ebc1c4afb7be391b48a  /tmp/v05-source.tar.xz' | sha256sum -c -
+          tar -xJf /tmp/v05-source.tar.xz
           grep -q 'versionCode = 5' v04work/app/build.gradle.kts
+          grep -q 'versionName = "0.5.0"' v04work/app/build.gradle.kts
           grep -q 'version = 3' v04work/app/src/main/java/tw/com/tft/lineai/data/AppDatabase.kt
-          zip -qr /tmp/quanyi-v05-verified-source.zip v04work
-          sha256sum /tmp/quanyi-v05-verified-source.zip
 
-      - name: Upload verified v0.5 source
+      - name: Verify and apply v0.6 patch
+        run: |
+          set -euo pipefail
+          test "$(wc -c < line-ai-build/v06patch/patch.part00)" -eq 6000
+          test "$(wc -c < line-ai-build/v06patch/patch.part01)" -eq 6000
+          test "$(wc -c < line-ai-build/v06patch/patch.part02)" -eq 6000
+          test "$(wc -c < line-ai-build/v06patch/patch.part03)" -eq 6000
+          test "$(wc -c < line-ai-build/v06patch/patch.part04)" -eq 5592
+          echo '5ce504c9661df291a1ff1e3e2691f4ec505b21c29899c574c6cd247a1decbab0  line-ai-build/v06patch/patch.part00' | sha256sum -c -
+          echo 'c01665617590026c316d5c227f338477f4ab2ef4954ef2c7adf0a061bc6c682b  line-ai-build/v06patch/patch.part01' | sha256sum -c -
+          echo 'ac0794b34a1033517907b28a0b729bcac4eff23b13b8ad2874942c8491f9ec4f  line-ai-build/v06patch/patch.part02' | sha256sum -c -
+          echo '4229d4c0ea163868719963fb4dd9ffa085dc28faec1bbd22a686c65d477907c8  line-ai-build/v06patch/patch.part03' | sha256sum -c -
+          echo 'c98b30d414d2d60d40ac0cf7fd40d34c3df4f23eed48237feb36b9f5f5fe25ec  line-ai-build/v06patch/patch.part04' | sha256sum -c -
+          cat line-ai-build/v06patch/patch.part00 line-ai-build/v06patch/patch.part01 line-ai-build/v06patch/patch.part02 line-ai-build/v06patch/patch.part03 line-ai-build/v06patch/patch.part04 > /tmp/v06-patch.b64
+          echo 'e1b3f8cfba0aa3acdb31fe6b6d2ed3959a6ccd9a7044f5341107c45b954459f1  /tmp/v06-patch.b64' | sha256sum -c -
+          base64 --decode /tmp/v06-patch.b64 > /tmp/v06-patch.xz
+          echo '674d69ab87169ba81c3a38f5972a007bc1df5299d3f23ca137572727afdcccf2  /tmp/v06-patch.xz' | sha256sum -c -
+          xz -dc /tmp/v06-patch.xz > /tmp/v06.patch
+          echo '657f890e9d20edf149d11da05c05b8db06be7b328c1073f1c03bdc124b0b04dd  /tmp/v06.patch' | sha256sum -c -
+          sed -e 's#v06src/v04work#v04work#g' -e 's#v06work#v04work#g' /tmp/v06.patch > /tmp/v06-apply.patch
+          patch --dry-run -p0 < /tmp/v06-apply.patch
+          patch -p0 < /tmp/v06-apply.patch
+          grep -q 'versionCode = 7' v04work/app/build.gradle.kts
+          grep -q 'versionName = "0.6.0"' v04work/app/build.gradle.kts
+          grep -q 'version = 4' v04work/app/src/main/java/tw/com/tft/lineai/data/AppDatabase.kt
+          grep -q 'BACKUP_SCHEMA = 3' v04work/app/src/main/java/tw/com/tft/lineai/backup/BackupManager.kt
+          grep -q 'android:label="LINEOUT"' v04work/app/src/main/AndroidManifest.xml
+          test -f v04work/app/src/main/java/tw/com/tft/lineai/domain/PersonNameParser.kt
+          test -f v04work/app/src/main/java/tw/com/tft/lineai/domain/AiMemoryManager.kt
+          test -f v04work/app/src/main/java/tw/com/tft/lineai/capture/NotificationJumpRegistry.kt
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 36 SDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+
+      - name: Build unsigned LINEOUT v0.6 release APK
+        working-directory: v04work
+        run: gradle :app:assembleRelease --stacktrace --no-daemon
+
+      - name: Verify v0.6 package identity and unsigned state
+        run: |
+          set -euo pipefail
+          APK=v04work/app/build/outputs/apk/release/app-release-unsigned.apk
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/v06-badging.txt
+          grep -q "package: name='tw.com.tft.lineai' versionCode='7' versionName='0.6.0'" /tmp/v06-badging.txt
+          if "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"; then
+            echo 'Unsigned v0.6 release unexpectedly verifies as signed'
+            exit 1
+          fi
+          sha256sum "$APK"
+
+      - name: Prepare offline signing tool
+        run: |
+          mkdir -p signing-tools/lib
+          cp "$ANDROID_HOME/build-tools/36.0.0/apksigner" signing-tools/
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tools/lib/
+          chmod +x signing-tools/apksigner
+
+      - name: Upload unsigned LINEOUT v0.6 APK
         uses: actions/upload-artifact@v4
         with:
-          name: Quanyi-LINEOUT-v0.5-Verified-Source
-          path: /tmp/quanyi-v05-verified-source.zip
+          name: LINEOUT-v0.6-Unsigned-Release
+          path: v04work/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload apksigner tool
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-apksigner-36-LINEOUT-v0.6
+          path: signing-tools
           if-no-files-found: error
           retention-days: 7
