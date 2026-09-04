@@ -76,21 +76,32 @@ jobs:
         with:
           gradle-version: '9.5.1'
 
-      - name: Compile and assemble unsigned v0.5 release APK
+      - name: Compile v0.5 release APK
         working-directory: v04work
         run: gradle :app:assembleRelease --stacktrace --no-daemon
 
-      - name: Verify package identity and version
+      - name: Verify v0.5 package identity
         run: |
           APK=v04work/app/build/outputs/apk/release/app-release-unsigned.apk
           test -f "$APK"
           "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/v05-badging.txt
           grep -q "package: name='tw.com.tft.lineai' versionCode='5' versionName='0.5.0'" /tmp/v05-badging.txt
-          if "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"; then
-            echo 'Unsigned release unexpectedly verifies as signed'
-            exit 1
-          fi
-          sha256sum "$APK"
+          cp "$APK" /tmp/quanyi-v0.5-unsigned.apk
+
+      - name: Build higher-version v0.5.1 update probe
+        working-directory: v04work
+        run: |
+          sed -i 's/versionCode = 5/versionCode = 6/' app/build.gradle.kts
+          sed -i 's/versionName = "0.5.0"/versionName = "0.5.1"/' app/build.gradle.kts
+          gradle :app:assembleRelease --stacktrace --no-daemon
+
+      - name: Verify v0.5.1 update package identity
+        run: |
+          APK=v04work/app/build/outputs/apk/release/app-release-unsigned.apk
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/v051-badging.txt
+          grep -q "package: name='tw.com.tft.lineai' versionCode='6' versionName='0.5.1'" /tmp/v051-badging.txt
+          cp "$APK" /tmp/quanyi-v0.5.1-unsigned.apk
 
       - name: Prepare offline signing tool
         run: |
@@ -102,15 +113,23 @@ jobs:
       - name: Upload v0.5 unsigned release APK
         uses: actions/upload-artifact@v4
         with:
-          name: Quanyi-LINE-AI-v0.5-Unsigned-Release
-          path: v04work/app/build/outputs/apk/release/app-release-unsigned.apk
+          name: Quanyi-LINE-AI-v0.5-Unsigned-Release-Probe
+          path: /tmp/quanyi-v0.5-unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload v0.5.1 unsigned update probe
+        uses: actions/upload-artifact@v4
+        with:
+          name: Quanyi-LINE-AI-v0.5.1-Unsigned-Update-Probe
+          path: /tmp/quanyi-v0.5.1-unsigned.apk
           if-no-files-found: error
           retention-days: 7
 
       - name: Upload apksigner tool
         uses: actions/upload-artifact@v4
         with:
-          name: Android-apksigner-36
+          name: Android-apksigner-36-Probe
           path: signing-tools
           if-no-files-found: error
           retention-days: 7
