@@ -48,6 +48,13 @@ jobs:
           test -f quanyi_v02/app/build.gradle.kts
           grep -q 'versionName = "0.2.0"' quanyi_v02/app/build.gradle.kts
 
+      - name: Upload v0.2 source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: Quanyi-LINE-AI-v0.2-source
+          path: quanyi_v02
+          retention-days: 1
+
       - name: Build v0.2 debug APK
         working-directory: quanyi_v02
         run: gradle :app:assembleDebug --stacktrace --no-daemon
