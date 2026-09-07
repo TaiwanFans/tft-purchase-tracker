@@ -1,0 +1,22 @@
+--- v04work/app/src/main/java/tw/com/tft/lineai/MainActivity.kt
++++ v04work/app/src/main/java/tw/com/tft/lineai/MainActivity.kt
+@@ -162,7 +162,8 @@
+ 
+ @Composable
+ private fun CasesScreen(onOpenCase:(String)->Unit) {
+-    val db = remember { AppDatabase.get(LocalContext.current) }
++    val context = LocalContext.current
++    val db = remember(context) { AppDatabase.get(context) }
+     val cases by db.workCaseDao().observeAll().collectAsState(initial = emptyList())
+     var filter by remember { mutableStateOf("全部") }
+     val shown = cases.filter { when(filter){ "客戶" -> it.kind==WorkCaseKind.SALES.name; "採購" -> it.kind==WorkCaseKind.PROCUREMENT.name; "工程" -> it.kind==WorkCaseKind.INSTALLATION.name; "未完成" -> it.status!=WorkCaseStatus.COMPLETED.name; else -> true } }
+@@ -229,7 +230,8 @@
+ 
+ @Composable
+ private fun PeopleScreen(){
+-    val db=remember{AppDatabase.get(LocalContext.current)}; val people by db.personDao().observeAll().collectAsState(initial=emptyList()); val orgs by db.organizationDao().observeAll().collectAsState(initial=emptyList())
++    val context = LocalContext.current
++    val db=remember(context){AppDatabase.get(context)}; val people by db.personDao().observeAll().collectAsState(initial=emptyList()); val orgs by db.organizationDao().observeAll().collectAsState(initial=emptyList())
+     var mode by remember{mutableStateOf("人物")}
+     Column(Modifier.fillMaxSize().padding(14.dp)){
+         Text("人物與公司",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold)
