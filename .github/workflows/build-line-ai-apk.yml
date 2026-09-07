@@ -1,4 +1,4 @@
-name: Build LINEOUT v0.6 Android APK
+name: Build LINEOUT v1.0 Operations Hub APK
 
 on:
   workflow_dispatch:
@@ -6,8 +6,7 @@ on:
     branches:
       - temp-line-ai-apk-build
     paths:
-      - 'line-ai-build/v06patch/**'
-      - 'line-ai-build/v06fix/**'
+      - 'line-ai-build/v10finalpatch/**'
       - '.github/workflows/build-line-ai-apk.yml'
 
 permissions:
@@ -42,7 +41,7 @@ jobs:
           grep -q 'versionCode = 5' v04work/app/build.gradle.kts
           grep -q 'version = 3' v04work/app/src/main/java/tw/com/tft/lineai/data/AppDatabase.kt
 
-      - name: Verify and apply v0.6 feature patch
+      - name: Reconstruct verified v0.6 source
         run: |
           set -euo pipefail
           test "$(wc -c < line-ai-build/v06patch/patch.part00)" -eq 6000
@@ -64,19 +63,46 @@ jobs:
           sed -e 's#v06src/v04work#v04work#g' -e 's#v06work#v04work#g' /tmp/v06.patch > /tmp/v06-apply.patch
           patch --dry-run -p0 < /tmp/v06-apply.patch
           patch -p0 < /tmp/v06-apply.patch
-
-      - name: Verify and apply compile fix
-        run: |
-          set -euo pipefail
           echo 'b32d4a2bcc133fdc850f1ca354cebe8b40d3a8b67edfa80875ed8fdc93539d51  line-ai-build/v06fix/compile-fix.patch' | sha256sum -c -
           patch --dry-run -p0 < line-ai-build/v06fix/compile-fix.patch
           patch -p0 < line-ai-build/v06fix/compile-fix.patch
           grep -q 'versionCode = 7' v04work/app/build.gradle.kts
           grep -q 'versionName = "0.6.0"' v04work/app/build.gradle.kts
           grep -q 'version = 4' v04work/app/src/main/java/tw/com/tft/lineai/data/AppDatabase.kt
-          grep -q 'BACKUP_SCHEMA = 3' v04work/app/src/main/java/tw/com/tft/lineai/backup/BackupManager.kt
-          grep -q 'roleWasOverridden' v04work/app/src/main/java/tw/com/tft/lineai/agent/RuleBasedAgent.kt
-          grep -q 'android:label="LINEOUT"' v04work/app/src/main/AndroidManifest.xml
+
+      - name: Verify and apply LINEOUT v1.0 operations patch
+        run: |
+          set -euo pipefail
+          test "$(wc -c < line-ai-build/v10finalpatch/patch.part00)" -eq 6000
+          test "$(wc -c < line-ai-build/v10finalpatch/patch.part01)" -eq 6000
+          test "$(wc -c < line-ai-build/v10finalpatch/patch.part02)" -eq 6000
+          test "$(wc -c < line-ai-build/v10finalpatch/patch.part03)" -eq 6000
+          test "$(wc -c < line-ai-build/v10finalpatch/patch.part04)" -eq 6000
+          test "$(wc -c < line-ai-build/v10finalpatch/patch.part05)" -eq 6000
+          test "$(wc -c < line-ai-build/v10finalpatch/patch.part06)" -eq 96
+          echo '4e6fa947c8c3980dea03191afad91125e17056e101f9f53c5c586c263993833b  line-ai-build/v10finalpatch/patch.part00' | sha256sum -c -
+          echo '93501229986a2f9ebf1c56c90bd39c89756e0e513d523618f0afb1e5f3103d3f  line-ai-build/v10finalpatch/patch.part01' | sha256sum -c -
+          echo '6cdb6264ffc23aecba4529d37afb33fec2af6f8544b3c93584db28ea5e3ae498  line-ai-build/v10finalpatch/patch.part02' | sha256sum -c -
+          echo '3a119249752678313ac7ea90f16acdcb1135eb62d642a6952592e189f8fc9d6e  line-ai-build/v10finalpatch/patch.part03' | sha256sum -c -
+          echo '2545539a09c48767884a3b7ad95a1d4f1e4b70a5402718957bbe0ff60f2e5fc4  line-ai-build/v10finalpatch/patch.part04' | sha256sum -c -
+          echo '45cacc943a593acf5f9464aeb65d2b19c093a6920c37e04227a9db6e3622bc8b  line-ai-build/v10finalpatch/patch.part05' | sha256sum -c -
+          echo '7029c6b3a3305fa85eef060a1af029dfbb50542f8772b0fad3c9f00f571cede5  line-ai-build/v10finalpatch/patch.part06' | sha256sum -c -
+          cat line-ai-build/v10finalpatch/patch.part00 line-ai-build/v10finalpatch/patch.part01 line-ai-build/v10finalpatch/patch.part02 line-ai-build/v10finalpatch/patch.part03 line-ai-build/v10finalpatch/patch.part04 line-ai-build/v10finalpatch/patch.part05 line-ai-build/v10finalpatch/patch.part06 > /tmp/v10.b64
+          echo 'e7b9527c6866bee607e7bf4bc79cfda205b54636addbf5f438b1d02285c3f683  /tmp/v10.b64' | sha256sum -c -
+          base64 --decode /tmp/v10.b64 > /tmp/v10.patch.xz
+          echo 'f40f8b0fad0efb5913e77b4c65f216a722be5d5a3598154f323a086e856b0054  /tmp/v10.patch.xz' | sha256sum -c -
+          xz -dc /tmp/v10.patch.xz > /tmp/v10.patch
+          echo 'a6222abba6cd0eecf86c83bc709588c1f3dcd7c8113bd61be7529b40cb009289  /tmp/v10.patch' | sha256sum -c -
+          sed -e 's#/mnt/data/v06base#v04work#g' -e 's#/mnt/data/v10build#v04work#g' /tmp/v10.patch > /tmp/v10-apply.patch
+          patch --dry-run -p0 < /tmp/v10-apply.patch
+          patch -p0 < /tmp/v10-apply.patch
+          grep -q 'versionCode = 8' v04work/app/build.gradle.kts
+          grep -q 'versionName = "1.0.0"' v04work/app/build.gradle.kts
+          grep -q 'version = 5' v04work/app/src/main/java/tw/com/tft/lineai/data/AppDatabase.kt
+          grep -q 'BACKUP_SCHEMA = 4' v04work/app/src/main/java/tw/com/tft/lineai/backup/BackupManager.kt
+          test -f v04work/app/src/main/java/tw/com/tft/lineai/data/OperationalModels.kt
+          test -f v04work/app/src/main/java/tw/com/tft/lineai/data/OperationalDaos.kt
+          test -f v04work/app/src/main/java/tw/com/tft/lineai/operations/OperationalSync.kt
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -97,19 +123,19 @@ jobs:
         with:
           gradle-version: '9.5.1'
 
-      - name: Build unsigned LINEOUT v0.6 release APK
+      - name: Build unsigned LINEOUT v1.0 release APK
         working-directory: v04work
         run: gradle :app:assembleRelease --stacktrace --no-daemon
 
-      - name: Verify v0.6 package identity and unsigned state
+      - name: Verify v1.0 package identity and unsigned state
         run: |
           set -euo pipefail
           APK=v04work/app/build/outputs/apk/release/app-release-unsigned.apk
           test -f "$APK"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/v06-badging.txt
-          grep -q "package: name='tw.com.tft.lineai' versionCode='7' versionName='0.6.0'" /tmp/v06-badging.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/v10-badging.txt
+          grep -q "package: name='tw.com.tft.lineai' versionCode='8' versionName='1.0.0'" /tmp/v10-badging.txt
           if "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"; then
-            echo 'Unsigned v0.6 release unexpectedly verifies as signed'
+            echo 'Unsigned v1.0 release unexpectedly verifies as signed'
             exit 1
           fi
           sha256sum "$APK"
@@ -121,10 +147,10 @@ jobs:
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tools/lib/
           chmod +x signing-tools/apksigner
 
-      - name: Upload unsigned LINEOUT v0.6 APK
+      - name: Upload unsigned LINEOUT v1.0 APK
         uses: actions/upload-artifact@v4
         with:
-          name: LINEOUT-v0.6-Unsigned-Release
+          name: LINEOUT-v1.0-Operations-Hub-Unsigned
           path: v04work/app/build/outputs/apk/release/app-release-unsigned.apk
           if-no-files-found: error
           retention-days: 7
@@ -132,7 +158,7 @@ jobs:
       - name: Upload apksigner tool
         uses: actions/upload-artifact@v4
         with:
-          name: Android-apksigner-36-LINEOUT-v0.6
+          name: Android-apksigner-36-LINEOUT-v1.0
           path: signing-tools
           if-no-files-found: error
           retention-days: 7
