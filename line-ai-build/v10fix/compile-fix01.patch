@@ -1,0 +1,33 @@
+--- v04work/app/src/main/java/tw/com/tft/lineai/MainActivity.kt
++++ v04work/app/src/main/java/tw/com/tft/lineai/MainActivity.kt
+@@ -56,6 +56,7 @@
+ private enum class MainTab(val label: String) { HOME("首頁"), CASES("案件"), PEOPLE("人物"), MESSAGES("訊息"), MORE("更多") }
+ private enum class QuickType { TASK, CASE, PERSON, ORGANIZATION }
+ 
++@OptIn(ExperimentalMaterial3Api::class)
+ @Composable
+ private fun LineoutApp() {
+     val context = LocalContext.current
+@@ -349,7 +350,6 @@
+ private fun MessageCard(context:Context,db:AppDatabase,e:RawLineEventEntity,linked:WorkCaseV1Entity?,onOpenCase:(String)->Unit,onMessage:(String)->Unit){
+     val scope=rememberCoroutineScope();Card{Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(5.dp)){Text("${e.title ?: "未辨識人物"}｜${e.conversationTitle ?: "私人對話"}",fontWeight=FontWeight.Bold);Text((e.bigText?:e.text?:"（通知無可讀文字）").take(700));Text("${fmt(e.postedAt)}｜${e.source}${if(e.historical)"｜歷史" else ""}",style=MaterialTheme.typography.labelSmall);linked?.let{Text("案件：${it.title}",style=MaterialTheme.typography.labelMedium)};Row(horizontalArrangement=Arrangement.spacedBy(4.dp)){TextButton(onClick={copy(context,"LINE 原文",e.bigText?:e.text.orEmpty());onMessage("已複製原文")}){Text("複製")};TextButton(onClick={val s=searchText(e,linked);copy(context,"LINE 搜尋",s);onMessage("已複製搜尋文字")}){Text("複製搜尋")};TextButton(onClick={openLine(context,e,linked);onMessage("已嘗試開啟 LINE；若無法直達，可貼上已複製的搜尋文字")}){Text("開啟 LINE")};linked?.let{TextButton(onClick={onOpenCase(it.id)}){Text("案件")}}};if(linked==null) OutlinedButton(onClick={scope.launch(Dispatchers.IO){val now=System.currentTimeMillis();val id="wc_manual_${Hashing.sha256(e.id).take(20)}";db.workCaseV1Dao().upsert(WorkCaseV1Entity(id,"C${SimpleDateFormat("yyMMdd",Locale.TAIWAN).format(Date(now))}-${id.takeLast(4).uppercase()}",listOfNotNull(e.conversationTitle,e.title,"待確認").joinToString("｜"),WorkCaseKind.OTHER.name,SalesStage.NEW_REQUEST.name,conversationId=null,summary=(e.bigText?:e.text).orEmpty(),nextAction="確認這則訊息要如何處理",waitingFor=WaitingFor.COMPANY.name,lastActivityAt=e.postedAt,needsReview=true,createdAt=now,updatedAt=now));db.rawEventDao().markProcessed(e.id,e.caseId);onMessage("已建立人工案件")}}){Text("建立案件")}}
+     }}
+-}
+ 
+ @Composable
+ private fun EvidenceCard(context:Context,e:RawLineEventEntity,c:WorkCaseV1Entity,onMessage:(String)->Unit){Card{Column(Modifier.padding(12.dp),verticalArrangement=Arrangement.spacedBy(5.dp)){Text("${fmt(e.postedAt)}｜${e.title?:"未辨識人物"}",fontWeight=FontWeight.Bold);Text((e.bigText?:e.text?:e.rawText).orEmpty());Text("群組：${e.conversationTitle?:"私人對話"}",style=MaterialTheme.typography.labelMedium);Row{TextButton(onClick={copy(context,"原文",e.bigText?:e.text.orEmpty());onMessage("已複製原文")}){Text("查看/複製原文")};TextButton(onClick={copy(context,"搜尋",searchText(e,c));onMessage("已複製搜尋字串")}){Text("複製搜尋")};TextButton(onClick={openLine(context,e,c)}){Text("開啟 LINE")}}}}}
+--- v04work/app/src/main/java/tw/com/tft/lineai/domain/V1OperationalEngine.kt
++++ v04work/app/src/main/java/tw/com/tft/lineai/domain/V1OperationalEngine.kt
+@@ -215,7 +215,11 @@
+             .filter { it.conversationTitle == conversation || it.caseId == legacy.id }
+             .take(8)
+             .map { (it.bigText ?: it.text).orEmpty().take(350) }
+-        val memory = sender?.let { AiMemoryManager.normalizeKey(it) }?.let { db.aiMemoryDao().find(MemoryType.PERSON.name, it) }
++        val memoryKey = sender
++            ?.let { PersonNameParser.parse(it)?.name }
++            ?.let { GroupIdentityResolver.normalize(it).replace(" ", "") }
++            ?.takeIf { it.isNotBlank() }
++        val memory = memoryKey?.let { db.aiMemoryDao().find(MemoryType.PERSON.name, it) }
+         return Context(
+             nearby = events,
+             personMemory = memory?.let { "${it.displayLabel.orEmpty()}|${it.relationshipRole.orEmpty()}|${it.note.orEmpty()}" },
