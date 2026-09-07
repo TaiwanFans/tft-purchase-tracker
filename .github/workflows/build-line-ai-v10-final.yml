@@ -1,0 +1,120 @@
+name: Build LINEOUT v1.0 Final APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [temp-line-ai-apk-build]
+    paths:
+      - 'line-ai-build/v10compilefix/**'
+      - '.github/workflows/build-line-ai-v10-final.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct verified v0.5 source
+        run: |
+          set -euo pipefail
+          cat line-ai-build/v05chunks/source.part{00..09} > /tmp/v05-source.b64
+          echo '7c878db5ce0f41b7fa7f9bfe193e438b93ad267ffc021fbbf9cc1d504ee05f0e  /tmp/v05-source.b64' | sha256sum -c -
+          base64 --decode /tmp/v05-source.b64 > /tmp/v05-source.tar.xz
+          echo '2b82f1c4dbec48f3cbd6c203691d5c5be5d067550d829ebc1c4afb7be391b48a  /tmp/v05-source.tar.xz' | sha256sum -c -
+          tar -xJf /tmp/v05-source.tar.xz
+          grep -q 'versionCode = 5' v04work/app/build.gradle.kts
+
+      - name: Reconstruct verified v0.6 source
+        run: |
+          set -euo pipefail
+          cat line-ai-build/v06patch/patch.part{00..04} > /tmp/v06-patch.b64
+          echo 'e1b3f8cfba0aa3acdb31fe6b6d2ed3959a6ccd9a7044f5341107c45b954459f1  /tmp/v06-patch.b64' | sha256sum -c -
+          base64 --decode /tmp/v06-patch.b64 > /tmp/v06-patch.xz
+          echo '674d69ab87169ba81c3a38f5972a007bc1df5299d3f23ca137572727afdcccf2  /tmp/v06-patch.xz' | sha256sum -c -
+          xz -dc /tmp/v06-patch.xz > /tmp/v06.patch
+          echo '657f890e9d20edf149d11da05c05b8db06be7b328c1073f1c03bdc124b0b04dd  /tmp/v06.patch' | sha256sum -c -
+          sed -e 's#v06src/v04work#v04work#g' -e 's#v06work#v04work#g' /tmp/v06.patch > /tmp/v06-apply.patch
+          patch -p0 < /tmp/v06-apply.patch
+          echo 'b32d4a2bcc133fdc850f1ca354cebe8b40d3a8b67edfa80875ed8fdc93539d51  line-ai-build/v06fix/compile-fix.patch' | sha256sum -c -
+          patch -p0 < line-ai-build/v06fix/compile-fix.patch
+          grep -q 'versionCode = 7' v04work/app/build.gradle.kts
+          grep -q 'version = 4' v04work/app/src/main/java/tw/com/tft/lineai/data/AppDatabase.kt
+
+      - name: Apply verified v1.0 operations patch and compile fix
+        run: |
+          set -euo pipefail
+          cat line-ai-build/v10finalpatch/patch.part{00..06} > /tmp/v10.b64
+          echo 'e7b9527c6866bee607e7bf4bc79cfda205b54636addbf5f438b1d02285c3f683  /tmp/v10.b64' | sha256sum -c -
+          base64 --decode /tmp/v10.b64 > /tmp/v10.patch.xz
+          echo 'f40f8b0fad0efb5913e77b4c65f216a722be5d5a3598154f323a086e856b0054  /tmp/v10.patch.xz' | sha256sum -c -
+          xz -dc /tmp/v10.patch.xz > /tmp/v10.patch
+          echo 'a6222abba6cd0eecf86c83bc709588c1f3dcd7c8113bd61be7529b40cb009289  /tmp/v10.patch' | sha256sum -c -
+          sed -e 's#/mnt/data/v06base#v04work#g' -e 's#/mnt/data/v10build#v04work#g' /tmp/v10.patch > /tmp/v10-apply.patch
+          patch -p0 < /tmp/v10-apply.patch
+          echo '00de36008370879c47b1ff6a75b7ed5f36911868036944237ac09527840ae9f4  line-ai-build/v10compilefix/compile-fix.patch' | sha256sum -c -
+          patch -p0 < line-ai-build/v10compilefix/compile-fix.patch
+          grep -q 'versionCode = 8' v04work/app/build.gradle.kts
+          grep -q 'versionName = "1.0.0"' v04work/app/build.gradle.kts
+          grep -q 'version = 5' v04work/app/src/main/java/tw/com/tft/lineai/data/AppDatabase.kt
+          grep -q 'BACKUP_SCHEMA = 4' v04work/app/src/main/java/tw/com/tft/lineai/backup/BackupManager.kt
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 36 SDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.5.1'
+
+      - name: Build release
+        working-directory: v04work
+        run: gradle :app:assembleRelease --stacktrace --no-daemon
+
+      - name: Verify unsigned APK
+        run: |
+          set -euo pipefail
+          APK=v04work/app/build/outputs/apk/release/app-release-unsigned.apk
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | tee /tmp/badging.txt
+          grep -q "package: name='tw.com.tft.lineai' versionCode='8' versionName='1.0.0'" /tmp/badging.txt
+          ! "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify "$APK"
+          sha256sum "$APK"
+
+      - name: Prepare apksigner
+        run: |
+          mkdir -p signing-tools/lib
+          cp "$ANDROID_HOME/build-tools/36.0.0/apksigner" signing-tools/
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tools/lib/
+          chmod +x signing-tools/apksigner
+
+      - name: Upload unsigned APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LINEOUT-v1.0-Final-Unsigned
+          path: v04work/app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload apksigner
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-apksigner-36-LINEOUT-v1.0-Final
+          path: signing-tools
+          if-no-files-found: error
+          retention-days: 7
