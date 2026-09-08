@@ -1,0 +1,217 @@
+:18.277024174 +0000
+@@ -30,7 +30,9 @@
+     val mimeType: String?,
+     val status: String,
+     val analysisJson: String?,
+-    val createdAt: Long
++    val createdAt: Long,
++    val conversationKey: String = "",
++    val conversationType: String = "其他"
+ )
+ 
+ data class ChecklistItem(
+@@ -54,3 +56,28 @@
+     val displayName: String,
+     val createdAt: Long
+ )
++
++
++data class ConversationBundle(
++    val key: String,
++    val displayName: String,
++    val conversationType: String,
++    val role: String,
++    val company: String,
++    val confidence: Double,
++    val messageCount: Int,
++    val pendingCount: Int,
++    val senderCount: Int,
++    val latestText: String,
++    val latestAt: Long
++)
++
++data class ConversationProfile(
++    val key: String,
++    val displayName: String,
++    val conversationType: String,
++    val role: String,
++    val company: String,
++    val confidence: Double,
++    val updatedAt: Long
++)
+diff -ruN /mnt/data/basev02/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/WorkOSDatabase.kt /mnt/data/workosv03/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/WorkOSDatabase.kt
+--- /mnt/data/basev02/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/WorkOSDatabase.kt	2026-09-08 01:31:29.000000000 +0000
++++ /mnt/data/workosv03/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/WorkOSDatabase.kt	2026-09-08 09:06:39.365761556 +0000
+@@ -10,7 +10,7 @@
+ import org.json.JSONArray
+ import org.json.JSONObject
+ 
+-class WorkOSDatabase(context: Context) : SQLiteOpenHelper(context, "workos.db", null, 1) {
++class WorkOSDatabase(context: Context) : SQLiteOpenHelper(context, "workos.db", null, 2) {
+     private val appContext = context.applicationContext
+     override fun onCreate(db: SQLiteDatabase) {
+         db.execSQL("""
+@@ -25,6 +25,9 @@
+                 mime_type TEXT,
+                 status TEXT NOT NULL DEFAULT '待分析',
+                 analysis_json TEXT,
++                conversation_key TEXT NOT NULL DEFAULT '',
++                conversation_type TEXT NOT NULL DEFAULT '未知',
++                event_fingerprint TEXT NOT NULL DEFAULT '',
+                 created_at INTEGER NOT NULL
+             )
+         """.trimIndent())
+@@ -129,23 +132,121 @@
+                 created_at INTEGER NOT NULL
+             )
+         """.trimIndent())
++        db.execSQL("""
++            CREATE TABLE conversation_profiles (
++                conversation_key TEXT PRIMARY KEY,
++                display_name TEXT NOT NULL DEFAULT '',
++                conversation_type TEXT NOT NULL DEFAULT '未知',
++                role TEXT NOT NULL DEFAULT '未知',
++                company TEXT NOT NULL DEFAULT '',
++                confidence REAL NOT NULL DEFAULT 0,
++                updated_at INTEGER NOT NULL
++            )
++        """.trimIndent())
+         db.execSQL("CREATE INDEX idx_cases_status ON cases(status)")
+         db.execSQL("CREATE INDEX idx_cases_updated ON cases(updated_at)")
+         db.execSQL("CREATE INDEX idx_inbox_created ON inbox(created_at)")
++        db.execSQL("CREATE INDEX idx_inbox_conversation ON inbox(conversation_key, created_at)")
++        db.execSQL("CREATE INDEX idx_inbox_fingerprint ON inbox(event_fingerprint)")
+         db.execSQL("CREATE INDEX idx_checklist_case ON checklist(case_id)")
+     }
+ 
+-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
++    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
++        if (oldVersion < 2) {
++            db.execSQL("ALTER TABLE inbox ADD COLUMN conversation_key TEXT NOT NULL DEFAULT ''")
++            db.execSQL("ALTER TABLE inbox ADD COLUMN conversation_type TEXT NOT NULL DEFAULT '未知'")
++            db.execSQL("ALTER TABLE inbox ADD COLUMN event_fingerprint TEXT NOT NULL DEFAULT ''")
++            db.execSQL("""
++                CREATE TABLE IF NOT EXISTS conversation_profiles (
++                    conversation_key TEXT PRIMARY KEY,
++                    display_name TEXT NOT NULL DEFAULT '',
++                    conversation_type TEXT NOT NULL DEFAULT '未知',
++                    role TEXT NOT NULL DEFAULT '未知',
++                    company TEXT NOT NULL DEFAULT '',
++                    confidence REAL NOT NULL DEFAULT 0,
++                    updated_at INTEGER NOT NULL
++                )
++            """.trimIndent())
++            db.execSQL("""
++                UPDATE inbox SET
++                    conversation_key = CASE
++                        WHEN group_name <> '' THEN 'line-group:' || lower(trim(group_name))
++                        WHEN source LIKE 'LINE%' AND sender <> '' THEN 'line-private:' || lower(trim(sender))
++                        ELSE 'legacy:' || id
++                    END,
++                    conversation_type = CASE
++                        WHEN group_name <> '' THEN 'LINE群組'
++                        WHEN source LIKE 'LINE%' AND sender <> '' THEN 'LINE私聊'
++                        ELSE '其他'
++                    END
++                WHERE conversation_key = ''
++            """.trimIndent())
++            db.execSQL("CREATE INDEX IF NOT EXISTS idx_inbox_conversation ON inbox(conversation_key, created_at)")
++            db.execSQL("CREATE INDEX IF NOT EXISTS idx_inbox_fingerprint ON inbox(event_fingerprint)")
++        }
++    }
+ 
+-    fun addInbox(source: String, text: String, groupName: String = "", sender: String = "", attachmentPath: String? = null, mimeType: String? = null, rawPayload: String = ""): Long {
++    fun addInbox(
++        source: String,
++        text: String,
++        groupName: String = "",
++        sender: String = "",
++        attachmentPath: String? = null,
++        mimeType: String? = null,
++        rawPayload: String = "",
++        conversationKey: String = "",
++        conversationType: String = "",
++        eventFingerprint: String = "",
++        createdAt: Long = System.currentTimeMillis()
++    ): Long {
++        val key = conversationKey.ifBlank { deriveConversationKey(source, groupName, sender, text, createdAt) }
++        val type = conversationType.ifBlank { deriveConversationType(source, groupName, sender) }
+         val v = ContentValues().apply {
+             put("source", source); put("text", text); put("group_name", groupName); put("sender", sender)
+             put("raw_payload", rawPayload); put("attachment_path", attachmentPath); put("mime_type", mimeType)
+-            put("status", "待分析"); put("created_at", System.currentTimeMillis())
++            put("status", "待分析"); put("conversation_key", key); put("conversation_type", type); put("event_fingerprint", eventFingerprint)
++            put("created_at", createdAt)
+         }
+         return writableDatabase.insertOrThrow("inbox", null, v)
+     }
+ 
++    fun addInboxDeduplicated(
++        source: String,
++        text: String,
++        groupName: String = "",
++        sender: String = "",
++        attachmentPath: String? = null,
++        mimeType: String? = null,
++        rawPayload: String = "",
++        conversationKey: String,
++        conversationType: String,
++        eventFingerprint: String,
++        createdAt: Long = System.currentTimeMillis()
++    ): Long {
++        if (eventFingerprint.isNotBlank()) {
++            readableDatabase.rawQuery("SELECT id FROM inbox WHERE event_fingerprint=? LIMIT 1", arrayOf(eventFingerprint)).use { c ->
++                if (c.moveToFirst()) return c.getLong(0)
++            }
++        }
++        return addInbox(source, text, groupName, sender, attachmentPath, mimeType, rawPayload, conversationKey, conversationType, eventFingerprint, createdAt)
++    }
++
++    private fun deriveConversationKey(source: String, groupName: String, sender: String, text: String, createdAt: Long): String {
++        fun norm(v: String) = v.trim().lowercase().replace(Regex("\\s+"), " ")
++        return when {
++            groupName.isNotBlank() -> "group:${norm(groupName)}"
++            source.startsWith("LINE") && sender.isNotBlank() -> "private:${norm(sender)}"
++            else -> "item:${createdAt}:${kotlin.math.abs((source + text).hashCode())}"
++        }
++    }
++
++    private fun deriveConversationType(source: String, groupName: String, sender: String): String = when {
++        source == "LINE TXT" -> "TXT對話"
++        source.startsWith("LINE") && groupName.isNotBlank() -> "LINE群組"
++        source.startsWith("LINE") && sender.isNotBlank() -> "LINE私聊"
++        else -> "其他"
++    }
++
+     fun updateInboxAnalysis(id: Long, json: String, status: String = "已分析") {
+         val v = ContentValues().apply { put("analysis_json", json); put("status", status) }
+         writableDatabase.update("inbox", v, "id=?", arrayOf(id.toString()))
+@@ -165,11 +266,69 @@
+         }
+     }
+ 
++    fun getConversationItems(key: String, limit: Int = 300): List<InboxItem> {
++        val out = mutableListOf<InboxItem>()
++        readableDatabase.rawQuery(
++            "SELECT * FROM inbox WHERE conversation_key=? ORDER BY created_at DESC LIMIT ?",
++            arrayOf(key, limit.toString())
++        ).use { c -> while (c.moveToNext()) out += inboxFrom(c) }
++        return out.reversed()
++    }
++
++    fun getConversationBundles(limitItems: Int = 2000): List<ConversationBundle> {
++        val items = getInbox(limitItems)
++        val profiles = getConversationProfiles().associateBy { it.key }
++        return items.groupBy { it.conversationKey.ifBlank { "legacy:${it.id}" } }.map { (key, group) ->
++            val sorted = group.sortedByDescending { it.createdAt }
++            val latest = sorted.first()
++            val profile = profiles[key]
++            val display = profile?.displayName?.takeIf { it.isNotBlank() }
++                ?: latest.groupName.takeIf { it.isNotBlank() }
++                ?: latest.sender.takeIf { it.isNotBlank() }
++                ?: latest.source
++            ConversationBundle(
++                key = key,
++                displayName = display,
++                conversationType = profile?.conversationType?.takeIf { it.isNotBlank() && it != "未知" } ?: latest.conversationType,
++      
