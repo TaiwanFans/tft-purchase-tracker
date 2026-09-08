@@ -1,0 +1,220 @@
+diff -ruN /mnt/data/basev02/QuanYiAIWorkOS/app/build.gradle.kts /mnt/data/workosv03/QuanYiAIWorkOS/app/build.gradle.kts
+--- /mnt/data/basev02/QuanYiAIWorkOS/app/build.gradle.kts	2026-09-08 07:57:21.000000000 +0000
++++ /mnt/data/workosv03/QuanYiAIWorkOS/app/build.gradle.kts	2026-09-08 09:06:14.617679726 +0000
+@@ -10,8 +10,8 @@
+         applicationId = "tw.com.tft.aiworkos"
+         minSdk = 26
+         targetSdk = 36
+-        versionCode = 2
+-        versionName = "0.2.0"
++        versionCode = 3
++        versionName = "0.3.0"
+     }
+ 
+     buildTypes {
+diff -ruN /mnt/data/basev02/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/AIClient.kt /mnt/data/workosv03/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/AIClient.kt
+--- /mnt/data/basev02/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/AIClient.kt	2026-09-08 07:57:21.000000000 +0000
++++ /mnt/data/workosv03/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/AIClient.kt	2026-09-08 09:04:57.998624156 +0000
+@@ -56,6 +56,96 @@
+         return chat(prompt, item.attachmentPath, item.mimeType)
+     }
+ 
++    fun analyzeConversation(bundle: ConversationBundle, items: List<InboxItem>, candidates: List<CaseItem>): Result {
++        val candidateText = if (candidates.isEmpty()) "無" else candidates.joinToString("\n") {
++            "ID=${it.id}｜${it.title}｜${it.company}｜${it.status}｜${it.nextAction}"
++        }
++        val transcript = buildConversationTranscript(items)
++        val prompt = """
++你是「全益畜牧器具 / 台灣電扇科技有限公司」的 LINE 對話整理器。
++這次不是分析單一訊息，而是分析「同一個 LINE 對話 / 群組」的一段近期聊天紀錄。
++
++第一步先判斷整個對話屬性：
++- conversation_type：LINE群組 / LINE私聊 / TXT對話 / 其他
++- role：客戶 / 廠商 / 老闆 / 員工 / 混合 / 未知
++- company：能確認才填，不能確認就空白
++- 不要因為某一則訊息就改變整個群組身份；要看整段對話與發言者。
++
++第二步從整段對話中辨識「0~5 個真正需要追蹤的工作案件」。
++不要把每一則訊息各自建立案件。相同事情要合併成同一 Case。
++如果只是閒聊、收到、謝謝、表情、重複通知，不要建立案件。
++沒有證據就不可宣稱已完成；不確定請降低 confidence。
++
++公司業務流程：確認需求→報價→傳對應型錄→傳產品/安裝照片→電話聯絡解說→持續追蹤→訂單/轉單/出貨。
++採購流程：採購單→傳廠商→確認收到→廠商簽名回傳→追生產→確認交期→到貨→清點/驗收/品管→完成。
++
++可能相關既有案件：
++$candidateText
++
++對話資料：
++對話名稱=${bundle.displayName}
++系統判斷類型=${bundle.conversationType}
++目前角色標記=${bundle.role}
++訊息數=${bundle.messageCount}
++近期聊天：
++$transcript
++
++只輸出 JSON，不要 Markdown：
++{
++  "conversation": {
++    "display_name":"",
++    "conversation_type":"LINE群組/LINE私聊/TXT對話/其他",
++    "role":"客戶/廠商/老闆/員工/混合/未知",
++    "company":"",
++    "summary":"",
++    "confidence":0.0
++  },
++  "cases":[
++    {
++      "case_title":"",
++      "company":"",
++      "person":"",
++      "role":"客戶/廠商/老闆/員工/未知",
++      "case_type":"詢價/報價/採購/廠商追蹤/客戶追蹤/老闆交辦/行政/其他",
++      "summary":"",
++      "completed_items":[],
++      "missing_items":[],
++      "next_action":"",
++      "assigned_to":"",
++      "priority":"urgent/high/medium/low",
++      "status":"待處理/處理中/等客戶/等廠商/等老闆/等內部/待追蹤/已完成/暫停/封存",
++      "due_date":null,
++      "waiting_for":"",
++      "confidence":0.0,
++      "match_existing_case_id":null,
++      "match_confidence":0.0,
++      "relevant_message_ids":[]
++    }
++  ]
++}
++規則：
++1. relevant_message_ids 只能使用聊天紀錄中 [ID=數字] 的 ID。
++2. match_existing_case_id 只能從上方既有案件 ID 選；不確定就 null。
++3. 同一件事情跨多則訊息要合併，不要拆成多案。
++4. cases 可以是空陣列。
++5. confidence 範圍 0~1。
++        """.trimIndent()
++        return chat(prompt, null, null)
++    }
++
++    private fun buildConversationTranscript(items: List<InboxItem>, maxChars: Int = 30000): String {
++        val lines = mutableListOf<String>()
++        var used = 0
++        for (item in items.asReversed()) {
++            val sender = item.sender.ifBlank { item.groupName.ifBlank { item.source } }
++            val line = "[ID=${item.id}] ${item.createdAt}｜$sender：${item.text.ifBlank { "（附件）" }}"
++            if (used + line.length > maxChars) break
++            lines += line
++            used += line.length
++        }
++        return lines.asReversed().joinToString("\n")
++    }
++
+     fun generateLine(caseItem: CaseItem, recentMessages: List<String>, mode: String, salutation: String?, date: String): Result {
+         val name = salutation?.takeIf { it.isNotBlank() } ?: caseItem.person.ifBlank { caseItem.company }
+         val prompt = """
+diff -ruN /mnt/data/basev02/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/LineNotificationListenerService.kt /mnt/data/workosv03/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/LineNotificationListenerService.kt
+--- /mnt/data/basev02/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/LineNotificationListenerService.kt	2026-09-08 01:22:29.000000000 +0000
++++ /mnt/data/workosv03/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/LineNotificationListenerService.kt	2026-09-08 09:03:30.750556095 +0000
+@@ -1,50 +1,128 @@
+ package tw.com.tft.aiworkos
+ 
+ import android.app.Notification
++import android.os.Build
++import android.os.Bundle
+ import android.service.notification.NotificationListenerService
+ import android.service.notification.StatusBarNotification
++import org.json.JSONArray
+ import org.json.JSONObject
++import java.security.MessageDigest
+ 
+ class LineNotificationListenerService : NotificationListenerService() {
+     override fun onNotificationPosted(sbn: StatusBarNotification?) {
+         val n = sbn ?: return
+         if (n.packageName != "jp.naver.line.android") return
+         val extras = n.notification.extras ?: return
+-        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty().trim()
+-        if (text.isBlank()) return
+-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty().trim()
+-        val conversation = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString().orEmpty().trim()
+-        val sub = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString().orEmpty().trim()
+-
+-        val group = conversation.ifBlank { sub }
+-        val sender = when {
+-            title.isBlank() -> ""
+-            group.isNotBlank() && title == group -> ""
+-            else -> title
+-        }
+-        val raw = JSONObject()
+-            .put("package", n.packageName)
+-            .put("key", n.key)
+-            .put("post_time", n.postTime)
+-            .put("title", title)
+-            .put("conversation_title", conversation)
+-            .put("sub_text", sub)
+-            .put("text", text)
+-            .put("note", "僅保存 Android 通知實際提供的欄位；不代表 LINE 完整聊天內容")
+-            .toString()
+ 
+         try {
+             WorkOSDatabase(applicationContext).use { db ->
+-                db.addInbox(
++                val conversationTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString().orEmpty().trim()
++                val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty().trim()
++                val sub = extras.getCharSequence(Notification.EXTRA_SUB_TEXT)?.toString().orEmpty().trim()
++                val messages = extractMessagingStyleMessages(extras)
++
++                if (messages.isNotEmpty()) {
++                    val distinctSenders = messages.map { it.sender }.filter { it.isNotBlank() }.distinct()
++                    val isGroup = conversationTitle.isNotBlank() || distinctSenders.size > 1
++                    val displayName = when {
++                        conversationTitle.isNotBlank() -> conversationTitle
++                        title.isNotBlank() -> title
++                        distinctSenders.isNotEmpty() -> distinctSenders.first()
++                        else -> "LINE 對話"
++                    }
++                    val type = if (isGroup) "LINE群組" else "LINE私聊"
++                    val key = conversationKey(type, displayName)
++                    messages.forEach { msg ->
++                        if (msg.text.isBlank()) return@forEach
++                        val sender = msg.sender.ifBlank { if (isGroup) title else displayName }
++                        val raw = JSONObject()
++                            .put("package", n.packageName)
++                            .put("notification_key", n.key)
++                            .put("post_time", n.postTime)
++                            .put("message_time", msg.time)
++                            .put("title", title)
++                            .put("conversation_title", conversationTitle)
++                            .put("sub_text", sub)
++                            .put("messaging_style", true)
++                            .put("note", "僅保存 Android 通知實際提供的欄位；不代表 LINE 完整聊天內容")
++                            .toString()
++                        val fp = fingerprint(key, sender, msg.text, msg.time.takeIf { it > 0 } ?: n.postTime)
++                        db.addInboxDeduplicated(
++                            source = "LINE通知",
++                            text = msg.text,
++                            groupName = if (isGroup) displayName else "",
++                            sender = sender,
++                            rawPayload = raw,
++                            conversationKey = key,
++                            conversationType = type,
++                            eventFingerprint = fp,
++                            createdAt = msg.time.takeIf { it > 0 } ?: n.postTime
++                        )
++                    }
++                    return
++                }
++
++                val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty().trim()
++                if (text.isBlank()) return
++                val groupName = conversationTitle.ifBlank { sub.takeIf { it.isNotBlank() && it != title }.orEmpty() }
++                val isGroup = groupName.isNotBlank()
++                val displayName = if (isGroup) groupName else title.ifBlank { "LINE 對話" }
++                val type = if (isGroup) "LINE群組" else "LINE私聊"
++                val sender = if (isGroup && title != displayName) title else if (!isGroup) title else ""
++                val key = conversationKey(type, displayName)
++                val raw = JSONObject()
++                    .put("package", n.packageName)
++                    .put("notification_key", n.key)
++                    .put("post_time", n.postTime)
++                    .put("title", title)
++
