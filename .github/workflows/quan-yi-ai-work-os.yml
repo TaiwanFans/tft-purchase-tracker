@@ -53,6 +53,23 @@ jobs:
           grep -q 'getConversationBundles' workos-source/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/WorkOSDatabase.kt
           grep -q 'analyzeConversation' workos-source/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/AIClient.kt
 
+      - name: Apply verified Kotlin syntax fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('workos-source/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/MainActivity.kt')
+          s = p.read_text()
+          old = '''.setMessage(if (r.ok) "${secure.providerDisplayName()} / ${secure.modelName}
+
+${r.content.take(300)}" else r.error)'''
+          new = '''.setMessage(if (r.ok) "${secure.providerDisplayName()} / ${secure.modelName}\\n\\n${r.content.take(300)}" else r.error)'''
+          if old not in s:
+              raise SystemExit('Expected malformed AI connection message was not found')
+          p.write_text(s.replace(old, new, 1))
+          print('MainActivity.kt syntax fix applied')
+          PY
+
       - name: Gradle configuration check
         working-directory: workos-source/QuanYiAIWorkOS
         run: gradle help --stacktrace
