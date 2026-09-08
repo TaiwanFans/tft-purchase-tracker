@@ -1,0 +1,62 @@
+           role = profile?.role ?: "未知",
++                company = profile?.company ?: "",
++                confidence = profile?.confidence ?: 0.0,
++                messageCount = group.size,
++                pendingCount = group.count { it.status == "待分析" },
++                senderCount = group.map { it.sender }.filter { it.isNotBlank() }.distinct().size,
++                latestText = latest.text.ifBlank { "（附件）" },
++                latestAt = latest.createdAt
++            )
++        }.sortedByDescending { it.latestAt }
++    }
++
++    fun upsertConversationProfile(profile: ConversationProfile) {
++        val v = ContentValues().apply {
++            put("conversation_key", profile.key); put("display_name", profile.displayName); put("conversation_type", profile.conversationType)
++            put("role", profile.role); put("company", profile.company); put("confidence", profile.confidence); put("updated_at", profile.updatedAt)
++        }
++        writableDatabase.insertWithOnConflict("conversation_profiles", null, v, SQLiteDatabase.CONFLICT_REPLACE)
++    }
++
++    fun getConversationProfiles(): List<ConversationProfile> {
++        val out = mutableListOf<ConversationProfile>()
++        readableDatabase.rawQuery("SELECT * FROM conversation_profiles", null).use { c ->
++            while (c.moveToNext()) out += ConversationProfile(c.getString(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getDouble(5), c.getLong(6))
++        }
++        return out
++    }
++
++    fun markConversationAnalyzed(key: String, json: String) {
++        val v = ContentValues().apply { put("analysis_json", json); put("status", "已分析") }
++        writableDatabase.update("inbox", v, "conversation_key=?", arrayOf(key))
++    }
++
+     private fun inboxFrom(c: Cursor) = InboxItem(
+         c.getLong(c.getColumnIndexOrThrow("id")), c.getString(c.getColumnIndexOrThrow("source")),
+         c.getString(c.getColumnIndexOrThrow("text")), c.getString(c.getColumnIndexOrThrow("group_name")),
+         c.getString(c.getColumnIndexOrThrow("sender")), c.getStringOrNull("attachment_path"), c.getStringOrNull("mime_type"),
+-        c.getString(c.getColumnIndexOrThrow("status")), c.getStringOrNull("analysis_json"), c.getLong(c.getColumnIndexOrThrow("created_at"))
++        c.getString(c.getColumnIndexOrThrow("status")), c.getStringOrNull("analysis_json"), c.getLong(c.getColumnIndexOrThrow("created_at")),
++        c.getString(c.getColumnIndexOrThrow("conversation_key")), c.getString(c.getColumnIndexOrThrow("conversation_type"))
+     )
+ 
+     fun createCase(title: String, company: String = "", person: String = "", role: String = "未知", type: String = "其他", summary: String = "", status: String = "待處理", priority: String = "medium", nextAction: String = "", assignedTo: String = "", dueAt: Long? = null, waitingFor: String = "", confidence: Double = 0.0, sourceInboxId: Long? = null): Long {
+@@ -347,7 +506,7 @@
+ 
+     fun exportJson(): JSONObject {
+         val root = JSONObject().put("schema_version", 1).put("exported_at", System.currentTimeMillis())
+-        listOf("inbox", "cases", "case_messages", "checklist", "reminders", "persons", "companies", "attachments", "tasks", "ai_analysis").forEach { table ->
++        listOf("inbox", "conversation_profiles", "cases", "case_messages", "checklist", "reminders", "persons", "companies", "attachments", "tasks", "ai_analysis").forEach { table ->
+             val arr = JSONArray()
+             readableDatabase.rawQuery("SELECT * FROM $table", null).use { c ->
+                 while (c.moveToNext()) {
+@@ -384,7 +543,7 @@
+     }
+ 
+     fun importJson(root: JSONObject) {
+-        val tables = listOf("inbox", "cases", "case_messages", "checklist", "reminders", "persons", "companies", "attachments", "tasks", "ai_analysis")
++        val tables = listOf("inbox", "conversation_profiles", "cases", "case_messages", "checklist", "reminders", "persons", "companies", "attachments", "tasks", "ai_analysis")
+         writableDatabase.beginTransaction()
+         try {
+             tables.reversed().forEach { writableDatabase.delete(it, null, null) }
+ 
