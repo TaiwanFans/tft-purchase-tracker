@@ -1,0 +1,1 @@
+Build v0.2.0: Gemini-first provider, polished UI, edge-safe layout, larger touch targets, branded app icon.
