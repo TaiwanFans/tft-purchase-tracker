@@ -1,0 +1,162 @@
+            .put("conversation_title", conversationTitle)
++                    .put("sub_text", sub)
++                    .put("text", text)
++                    .put("messaging_style", false)
++                    .put("note", "僅保存 Android 通知實際提供的欄位；不代表 LINE 完整聊天內容")
++                    .toString()
++                db.addInboxDeduplicated(
+                     source = "LINE通知",
+                     text = text,
+-                    groupName = group,
++                    groupName = if (isGroup) displayName else "",
+                     sender = sender,
+-                    rawPayload = raw
++                    rawPayload = raw,
++                    conversationKey = key,
++                    conversationType = type,
++                    eventFingerprint = fingerprint(key, sender, text, n.postTime),
++                    createdAt = n.postTime
+                 )
+             }
+         } catch (_: Exception) {
+-            // 通知監聽不可因資料庫錯誤造成服務崩潰。
++            // 通知監聽不可因解析或資料庫錯誤造成服務崩潰。
+         }
+     }
++
++    private data class Msg(val text: String, val sender: String, val time: Long)
++
++    private fun extractMessagingStyleMessages(extras: Bundle): List<Msg> {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return emptyList()
++        val bundles = extras.getParcelableArray(Notification.EXTRA_MESSAGES) ?: return emptyList()
++        return try {
++            Notification.MessagingStyle.Message.getMessagesFromBundleArray(bundles).mapNotNull { m ->
++                val text = m.text?.toString()?.trim().orEmpty()
++                if (text.isBlank()) null else Msg(
++                    text = text,
++                    sender = if (Build.VERSION.SDK_INT >= 28) m.senderPerson?.name?.toString().orEmpty() else @Suppress("DEPRECATION") m.sender?.toString().orEmpty(),
++                    time = m.timestamp
++                )
++            }
++        } catch (_: Exception) { emptyList() }
++    }
++
++    private fun conversationKey(type: String, name: String): String =
++        "${type.lowercase()}:${name.trim().lowercase().replace(Regex("\\s+"), " ")}"
++
++    private fun fingerprint(key: String, sender: String, text: String, time: Long): String {
++        val bucket = time / 120_000L
++        val raw = "$key|${sender.trim()}|${text.trim()}|$bucket"
++        return MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
++            .joinToString("") { "%02x".format(it) }
++    }
+ }
+diff -ruN /mnt/data/basev02/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/MainActivity.kt /mnt/data/workosv03/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/MainActivity.kt
+--- /mnt/data/basev02/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/MainActivity.kt	2026-09-08 07:58:54.000000000 +0000
++++ /mnt/data/workosv03/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/MainActivity.kt	2026-09-08 09:06:39.370358449 +0000
+@@ -228,38 +228,236 @@
+ 
+     private fun showInbox() {
+         currentScreen = "inbox"
+-        clear("AI 工作收件匣", "先收進來，再決定要不要交給 AI 轉成案件。")
++        clear("對話收件匣", "先把訊息整理成對話，再由 AI 從整段對話辨識案件。")
+ 
+         val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+         row1.addView(primaryButton("＋ 貼上文字") { showAddInboxDialog() }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(0,0,dp(5),0) })
+-        row1.addView(secondaryButton("匯入 TXT") { openTxt() }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(dp(5),0,0,0) })
++        row1.addView(secondaryButton("匯入 LINE TXT") { openTxt() }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(dp(5),0,0,0) })
+         content.addView(row1)
+         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+         row2.addView(secondaryButton("圖片 / PDF") { openFile() }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(0,dp(8),dp(5),0) })
+         row2.addView(secondaryButton("拍採購單") { takePurchasePhoto() }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(dp(5),dp(8),0,0) })
+         content.addView(row2)
+-        content.addView(infoBox("AI 分析時只會送出該筆 Inbox、相關案件候選與必要附件；LINE 通知只保存 Android 系統實際提供的內容。"))
++        content.addView(infoBox("LINE 通知會先依『群組 / 私聊 / 對話名稱』自動聚合並去除短時間重複通知。Inbox 預設只顯示對話，不再把幾百則訊息逐則鋪滿。"))
+ 
+-        section("最近 Inbox")
+-        val items = db.getInbox(100)
+-        if (items.isEmpty()) content.addView(infoBox("目前沒有資料。"))
+-        items.forEach { item ->
++        val bundles = db.getConversationBundles(2500)
++        if (bundles.isEmpty()) {
++            section("對話")
++            content.addView(infoBox("目前沒有資料。LINE 通知、TXT、手動輸入或附件進來後會先整理成對話。"))
++            return
++        }
++
++        val sections = linkedMapOf(
++            "客戶" to bundles.filter { it.role == "客戶" },
++            "廠商" to bundles.filter { it.role == "廠商" },
++            "老闆" to bundles.filter { it.role == "老闆" },
++            "員工 / 內部" to bundles.filter { it.role == "員工" },
++            "混合對話" to bundles.filter { it.role == "混合" },
++            "未分類 LINE 群組" to bundles.filter { it.role == "未知" && it.conversationType == "LINE群組" },
++            "未分類 LINE 私聊" to bundles.filter { it.role == "未知" && it.conversationType == "LINE私聊" },
++            "TXT / 其他來源" to bundles.filter { it.role == "未知" && it.conversationType !in setOf("LINE群組", "LINE私聊") }
++        )
++        sections.forEach { (title, list) ->
++            if (list.isEmpty()) return@forEach
++            section("$title ${list.size}")
++            list.forEach { content.addView(conversationCard(it), marginLp()) }
++        }
++    }
++
++    private fun conversationCard(b: ConversationBundle): View = card().apply {
++        val header = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
++        header.addView(text(b.displayName, 19f, true), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
++        header.addView(chip(b.conversationType, Color.rgb(226, 240, 235), Color.rgb(22, 91, 72)))
++        addView(header)
++        if (b.role != "未知") {
++            addView(text("${b.role}${b.company.takeIf { it.isNotBlank() }?.let { "｜$it" } ?: ""}", 14f, true, Color.rgb(72, 90, 83)).apply { setPadding(0, dp(7), 0, 0) })
++        }
++        val meta = buildString {
++            append("${b.messageCount} 則")
++            if (b.senderCount > 0) append("・${b.senderCount} 位發言者")
++            if (b.pendingCount > 0) append("・${b.pendingCount} 則待整理")
++            append("・${formatDateTime(b.latestAt)}")
++        }
++        addView(text(meta, 13f, false, Color.rgb(104, 116, 111)).apply { setPadding(0, dp(5), 0, 0) })
++        addView(text(b.latestText.replace('\n', ' ').take(130), 15f, false, Color.rgb(48, 59, 55)).apply { setPadding(0, dp(9), 0, dp(8)) })
++
++        val actions = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL }
++        actions.addView(secondaryButton("查看對話") { showConversation(b.key) }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(0,0,dp(5),0) })
++        actions.addView(primaryButton("AI 整理整段") { confirmAITransmission { analyzeConversation(b.key) } }, LinearLayout.LayoutParams(0, dp(50), 1f).apply { setMargins(dp(5),0,0,0) })
++        addView(actions)
++    }
++
++    private fun showConversation(key: String) {
++        currentScreen = "inbox"
++        val bundle = db.getConversationBundles(3000).firstOrNull { it.key == key } ?: run { showInbox(); return }
++        val items = db.getConversationItems(key, 300)
++        clear(bundle.displayName, "${bundle.conversationType}｜${bundle.role}｜共 ${bundle.messageCount} 則訊息")
++
++        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
++        row.addView(primaryButton("AI 整理整段") { confirmAITransmission { analyzeConversation(key) } }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(0,0,dp(5),0) })
++        row.addView(secondaryButton("分類對話") { showConversationRolePicker(bundle) }, LinearLayout.LayoutParams(0, dp(52), 1f).apply { setMargins(dp(5),0,0,0) })
++        content.addView(row)
++        content.addView(infoBox("AI 會讀取這個對話的近期內容，一次判斷對話身份並抽出 0～多個 Case；不會把每一則訊息都當成案件。"))
++
++        section(if (items.size > 120) "最近 120 則（共 ${items.size} 則已載入）" else "訊息 ${items.size} 則")
++        items.takeLast(120).forEach { item ->
+             val c = card().apply {
+-                addView(text("${item.source}　${formatDateTime(item.createdAt)}", 14f, true, Color.DKGRAY))
+-                val who = listOf(item.groupName, item.sender).filter { it.isNotBlank() }.joinToString(" / ")
+-                if (who.isNotBlank()) addView(text(who, 16f, true))
+-                addView(text(item.text.ifBlank { "（附件）" }.take(500), 16f, false))
+-                if (item.attachmentPath != null) addView(text("附件：${item.mimeType ?: "檔案"}", 14f, false, Color.DKGRAY))
+-                addView(text("狀態：${item.status}", 14f, false, if (item.status == "待分析") Color.rgb(160, 90, 0) else Color.DKGRAY))
+-                val buttons = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(8), 0, 0) }
+-                buttons.addView(primaryButton("AI 分析") { confirmAITransmission { analyzeInbox(item) } }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(0,0,dp(4),0) })
+-                buttons.addView(secondaryButton("手動建案件") { createCaseFromInboxManually(item) }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { setMargins(dp(4),0,0,0) })
+-                addView(buttons)
++                val who = item.sender.ifBlank { if (item.groupName.isNotBlank()) "群組訊息" else item.source }
++                addView(text("$who　${formatDateTime(item.createdAt)}", 13f, true, Color.rgb(78, 98, 90)))
++                addView(text(item.text.ifBlank { "（附件）" }, 16f, false).apply { setPadding(0, dp(5), 0, 0) })
+             }
+             content.addView(c, marginLp())
+         }
+     }
+ 
++    private fun showConversationRolePicker(bundle: ConversationBundle) {
++        val roles = arrayOf("客戶", "廠商", "老闆", "員工", "混合", "未知")
++
