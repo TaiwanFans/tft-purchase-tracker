@@ -1,0 +1,163 @@
+"未知")
++        AlertDialog.Builder(this).setTitle("這個對話屬於？").setItems(roles) { _, which ->
++            db.upsertConversationProfile(
++                ConversationProfile(bundle.key, bundle.displayName, bundle.conversationType, roles[which], bundle.company, if (roles[which] == "未知") 0.0 else 1.0, System.currentTimeMillis())
++            )
++            showConversation(bundle.key)
++        }.setNegativeButton("取消", null).show()
++    }
++
++    private fun analyzeConversation(key: String) {
++        val bundle = db.getConversationBundles(3000).firstOrNull { it.key == key } ?: return
++        val items = db.getConversationItems(key, 300)
++        if (items.isEmpty()) return
++        val progress = AlertDialog.Builder(this).setTitle("AI 正在整理對話")
++            .setMessage("先辨識這是客戶、廠商、員工或群組，再從整段對話合併出真正需要追蹤的案件。")
++            .setCancelable(false).create().apply { show() }
++        val candidateText = items.takeLast(80).joinToString("\n") { it.text }.take(12000)
++        val candidates = db.candidateCases(candidateText)
++        Thread {
++            val result = ai.analyzeConversation(bundle, items, candidates)
++            runOnUiThread {
++                progress.dismiss()
++                if (!result.ok) {
++                    AlertDialog.Builder(this).setTitle("AI 整理失敗").setMessage("${result.error}\n\n原始訊息仍保存在本機對話中。").setPositiveButton("知道了", null).show()
++                    return@runOnUiThread
++                }
++                val obj = ai.parseJsonObject(result.content)
++                if (obj == null) {
++                    AlertDialog.Builder(this).setTitle("AI 格式無法解析").setMessage(result.content.take(1800)).setPositiveButton("知道了", null).show()
++                    return@runOnUiThread
++                }
++                showConversationAIConfirm(bundle, items, obj)
++            }
++        }.start()
++    }
++
++    private fun showConversationAIConfirm(bundle: ConversationBundle, items: List<InboxItem>, root: JSONObject) {
++        val profile = root.optJSONObject("conversation") ?: JSONObject()
++        val cases = root.optJSONArray("cases") ?: JSONArray()
++        val confidence = (profile.optDouble("confidence", 0.0) * 100).toInt()
++        val message = buildString {
++            append("對話：${profile.optString("display_name").ifBlank { bundle.displayName }}\n")
++            append("類型：${profile.optString("conversation_type").ifBlank { bundle.conversationType }}\n")
++            append("判斷身份：${profile.optString("role", "未知")}\n")
++            if (profile.optString("company").isNotBlank()) append("公司：${profile.optString("company")}\n")
++            append("對話可信度：$confidence%\n")
++            if (profile.optString("summary").isNotBlank()) append("摘要：${profile.optString("summary")}\n")
++            append("\n辨識到 ${cases.length()} 個工作案件：\n")
++            for (i in 0 until cases.length()) {
++                val c = cases.optJSONObject(i) ?: continue
++                append("${i + 1}. ${c.optString("case_title", "未命名")}｜${c.optString("status", "待處理")}\n")
++                if (c.optString("next_action").isNotBlank()) append("   下一步：${c.optString("next_action")}\n")
++            }
++            if (cases.length() == 0) append("這段對話目前沒有需要建立的案件。\n")
++        }
++        AlertDialog.Builder(this)
++            .setTitle(if (confidence < 70) "需要人工確認分類" else "對話整理完成")
++            .setMessage(message)
++            .setNegativeButton("取消", null)
++            .setNeutralButton("只保存分類") { _, _ ->
++                saveConversationProfile(bundle, profile)
++                db.markConversationAnalyzed(bundle.key, root.toString())
++                showInbox()
++            }
++            .setPositiveButton(if (cases.length() > 0) "套用分類＋案件" else "保存分類") { _, _ ->
++                saveConversationProfile(bundle, profile)
++                db.markConversationAnalyzed(bundle.key, root.toString())
++                applyConversationCases(items, cases, root)
++                showInbox()
++            }.show()
++    }
++
++    private fun saveConversationProfile(bundle: ConversationBundle, profile: JSONObject) {
++        val role = profile.optString("role", "未知").takeIf { it in setOf("客戶", "廠商", "老闆", "員工", "混合", "未知") } ?: "未知"
++        db.upsertConversationProfile(
++            ConversationProfile(
++                key = bundle.key,
++                displayName = profile.optString("display_name").ifBlank { bundle.displayName },
++                conversationType = profile.optString("conversation_type").ifBlank { bundle.conversationType },
++                role = role,
++                company = profile.optString("company"),
++                confidence = profile.optDouble("confidence", 0.0),
++                updatedAt = System.currentTimeMillis()
++            )
++        )
++    }
++
++    private fun applyConversationCases(items: List<InboxItem>, cases: JSONArray, root: JSONObject) {
++        val byId = items.associateBy { it.id }
++        for (i in 0 until cases.length()) {
++            val o = cases.optJSONObject(i) ?: continue
++            if (o.optDouble("confidence", 0.0) < 0.45) continue
++            val relevantIds = o.optJSONArray("relevant_message_ids")?.let { arr ->
++                (0 until arr.length()).mapNotNull { idx -> arr.optLong(idx).takeIf { it > 0 } }
++            }.orEmpty()
++            val relevant = relevantIds.mapNotNull { byId[it] }.ifEmpty { items.takeLast(12) }
++            val matchId = o.optLong("match_existing_case_id", -1L)
++            val matchConf = o.optDouble("match_confidence", 0.0)
++            val existing = if (matchId > 0 && matchConf >= 0.75) db.getCase(matchId) else null
++            val caseId = if (existing != null) {
++                val newSummary = o.optString("summary").trim()
++                db.updateCase(existing.copy(
++                    company = existing.company.ifBlank { o.optString("company") },
++                    person = existing.person.ifBlank { o.optString("person") },
++                    role = if (existing.role == "未知") o.optString("role", "未知") else existing.role,
++                    summary = if (newSummary.isBlank() || existing.summary.contains(newSummary)) existing.summary else (existing.summary + "\n\n最新：" + newSummary).trim(),
++                    status = o.optString("status").takeIf { it in statuses() } ?: existing.status,
++                    priority = normalizePriority(o.optString("priority", existing.priority)),
++                    nextAction = o.optString("next_action").ifBlank { existing.nextAction },
++                    assignedTo = o.optString("assigned_to").ifBlank { existing.assignedTo },
++                    dueAt = parseDueDate(o.opt("due_date")) ?: existing.dueAt,
++                    waitingFor = o.optString("waiting_for").ifBlank { existing.waitingFor },
++                    confidence = maxOf(existing.confidence, o.optDouble("confidence", 0.0)),
++                    lastActivityAt = System.currentTimeMillis()
++                ))
++                existing.id
++            } else {
++                db.createCase(
++                    title = o.optString("case_title").ifBlank { "對話整理案件" },
++                    company = o.optString("company"),
++                    person = o.optString("person"),
++                    role = o.optString("role", "未知"),
++                    type = o.optString("case_type", "其他"),
++                    summary = o.optString("summary"),
++                    status = o.optString("status", "待處理").takeIf { it in statuses() } ?: "待處理",
++                    priority = normalizePriority(o.optString("priority", "medium")),
++                    nextAction = o.optString("next_action"),
++                    assignedTo = o.optString("assigned_to"),
++                    dueAt = parseDueDate(o.opt("due_date")),
++                    waitingFor = o.optString("waiting_for"),
++                    confidence = o.optDouble("confidence", 0.0),
++                    sourceInboxId = relevant.lastOrNull()?.id
++                )
++            }
++            val existingMessages = db.getCaseMessages(caseId, 120).toSet()
++            relevant.forEach { m ->
++                val formatted = "${m.sender}：${m.text}"
++                if (formatted !in existingMessages) db.addCaseMessage(caseId, m.source, m.sender, m.text)
++                m.attachmentPath?.let { path ->
++                    if (db.getAttachments(caseId).none { it.path == path }) db.addAttachment(caseId, m.id, path, m.mimeType.orEmpty(), File(path).name)
++                }
++            }
++            addMissingChecklist(caseId, jsonArrayStrings(o.optJSONArray("missing_items")))
++            db.addAIAnalysis(relevant.lastOrNull()?.id, caseId, root.toString(), o.optDouble("confidence", 0.0))
++        }
++    }
++
+     private fun showCases() {
+         currentScreen = "cases"
+         clear("案件", "訊息不是核心；每件工作都落到 Case。")
+@@ -859,7 +1057,8 @@
+             val name = displayName(uri) ?: "LINE聊天.txt"
+             val raw = contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }.orEmpty()
+             val chunks = LineTxtParser.parse(name, raw)
+-            chunks.forEach { db.addInbox("LINE TXT", it.text, groupName = it.groupName, rawPayload = raw.take(20000)) }
++            val threadKey = "line-txt:" + name.substringBeforeLast('.').trim().lowercase().replace(Regex("\\s+"), " ")
++            chunks.forEach { db.addInbox("LINE TXT", it.text, groupName = it.groupName, rawPayload = raw.take(20000), conversationKey = threadKey, conversationType = "TXT對話") }
+             toast("已匯入 ${chunks.size} 段聊天資料")
+             showInbox()
+         } catch (e: Exception) { toast("TXT 匯入失敗：${e.message}") }
+diff -ruN /mnt/data/basev02/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/Models.kt /mnt/data/workosv03/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/Models.kt
+--- /mnt/data/basev02/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/Models.kt	2026-09-08 01:26:01.000000000 +0000
++++ /mnt/data/workosv03/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/Models.kt	2026-09-08 09:04
