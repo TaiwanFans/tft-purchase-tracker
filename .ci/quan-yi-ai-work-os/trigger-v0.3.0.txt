@@ -1,2 +1,2 @@
-Trigger direct full-source v0.3.0 APK build
-2026-09-08 direct source
+Trigger v0.3.0 APK build after Kotlin syntax fix
+2026-09-08 compile fix
