@@ -1,2 +1,2 @@
-Trigger v0.3.0 Conversation Inbox build
+Trigger v0.3.0 Conversation Inbox rebuild after source chunk fix
 2026-09-08
