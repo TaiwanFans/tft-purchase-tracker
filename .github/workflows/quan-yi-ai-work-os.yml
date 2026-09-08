@@ -38,27 +38,20 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      - name: Reconstruct verified v0.2.0 source
+      - name: Reconstruct verified v0.3.0 source
         shell: bash
         run: |
-          cat .ci/quan-yi-ai-work-os/source.b64.part* > /tmp/QuanYiAIWorkOS-v0.2.0.zip.b64
-          base64 --decode /tmp/QuanYiAIWorkOS-v0.2.0.zip.b64 > /tmp/QuanYiAIWorkOS-v0.2.0.zip
-          echo '517389eb3c1630bd2c003f39782d7172daac00a42d5cbe0633dbdeddb1d985eb  /tmp/QuanYiAIWorkOS-v0.2.0.zip' | sha256sum -c -
+          cat .ci/quan-yi-ai-work-os/v03-source.b64.part* > /tmp/QuanYiAIWorkOS-v0.3.0.zip.b64
+          base64 --decode /tmp/QuanYiAIWorkOS-v0.3.0.zip.b64 > /tmp/QuanYiAIWorkOS-v0.3.0.zip
+          echo '8190f32e5f00648fa4c03ae1e59775321c01d3fb4af38002815d0777a5229e68  /tmp/QuanYiAIWorkOS-v0.3.0.zip' | sha256sum -c -
           rm -rf workos-source
           mkdir -p workos-source
-          unzip -q /tmp/QuanYiAIWorkOS-v0.2.0.zip -d workos-source
+          unzip -q /tmp/QuanYiAIWorkOS-v0.3.0.zip -d workos-source
           test -f workos-source/QuanYiAIWorkOS/settings.gradle.kts
           test -f workos-source/QuanYiAIWorkOS/app/build.gradle.kts
-
-      - name: Apply Conversation Inbox v0.3.0 patch
-        shell: bash
-        run: |
-          cat .ci/quan-yi-ai-work-os/v02-to-v03.patch.part* > /tmp/v02-to-v03.patch
-          cd workos-source/QuanYiAIWorkOS
-          patch -p5 < /tmp/v02-to-v03.patch
-          grep -q 'versionName = "0.3.0"' app/build.gradle.kts
-          grep -q 'getConversationBundles' app/src/main/java/tw/com/tft/aiworkos/WorkOSDatabase.kt
-          grep -q 'analyzeConversation' app/src/main/java/tw/com/tft/aiworkos/AIClient.kt
+          grep -q 'versionName = "0.3.0"' workos-source/QuanYiAIWorkOS/app/build.gradle.kts
+          grep -q 'getConversationBundles' workos-source/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/WorkOSDatabase.kt
+          grep -q 'analyzeConversation' workos-source/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/AIClient.kt
 
       - name: Gradle configuration check
         working-directory: workos-source/QuanYiAIWorkOS
