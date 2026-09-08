@@ -1,2 +1,2 @@
-Trigger v0.3.0 Conversation Inbox rebuild after source chunk fix
-2026-09-08
+Trigger direct full-source v0.3.0 APK build
+2026-09-08 direct source
