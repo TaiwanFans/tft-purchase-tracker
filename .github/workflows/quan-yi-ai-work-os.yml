@@ -1,18 +1,18 @@
-name: Build QuanYi AI Work OS Stable Migration APK
+name: Build QuanYi AI Work OS Agent APK v0.4.0
 
 on:
   push:
     branches:
       - quan-yi-ai-work-os-build
     paths:
-      - '.ci/quan-yi-ai-work-os/trigger-v0.3.0.txt'
+      - '.ci/quan-yi-ai-work-os/trigger-v0.4.0.txt'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build-stable-migration:
+  build-agent-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -48,17 +48,31 @@ jobs:
           mkdir -p workos-source
           unzip -q /tmp/QuanYiAIWorkOS-v0.3.0.zip -d workos-source
 
-      - name: Apply Kotlin fix and stable package id
+      - name: Apply verified Kotlin base fix
         shell: bash
         run: |
           FILE='workos-source/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/MainActivity.kt'
           sed -i '559,561c\                        .setMessage(if (r.ok) "${secure.providerDisplayName()} / ${secure.modelName}\\n\\n${r.content.take(300)}" else r.error)' "$FILE"
+
+      - name: Verify and apply v0.4 Agent patch
+        shell: bash
+        run: |
+          cat .ci/quan-yi-ai-work-os/v04line.patch.part* > /tmp/v04.patch
+          echo 'dde34fcfd37b9fe65461dec35e153bd7fd1e44f01d13525b597031442a77d12e  /tmp/v04.patch' | sha256sum -c -
+          cd workos-source/QuanYiAIWorkOS
+          patch -p1 < /tmp/v04.patch
+          grep -q 'versionName = "0.4.0"' app/build.gradle.kts
+          grep -q 'AgentSyncManager' app/src/main/java/tw/com/tft/aiworkos/LineNotificationListenerService.kt
+          test -f app/src/main/java/tw/com/tft/aiworkos/AgentSyncManager.kt
+
+      - name: Set permanent Agent package id
+        shell: bash
+        run: |
           GRADLE='workos-source/QuanYiAIWorkOS/app/build.gradle.kts'
-          sed -i 's/applicationId = "tw.com.tft.aiworkos"/applicationId = "tw.com.tft.aiworkos.stable"/' "$GRADLE"
           STRINGS='workos-source/QuanYiAIWorkOS/app/src/main/res/values/strings.xml'
-          sed -i 's#<string name="app_name">全益 AI Work OS</string>#<string name="app_name">全益 AI Work OS 新版</string>#' "$STRINGS"
-          grep -q 'applicationId = "tw.com.tft.aiworkos.stable"' "$GRADLE"
-          grep -q '全益 AI Work OS 新版' "$STRINGS"
+          sed -i 's/applicationId = "tw.com.tft.aiworkos.stable"/applicationId = "tw.com.tft.aiworkos.agent"/' "$GRADLE"
+          sed -i 's#<string name="app_name">全益 AI Work OS</string>#<string name="app_name">全益 AI Work OS Agent</string>#' "$STRINGS"
+          grep -q 'applicationId = "tw.com.tft.aiworkos.agent"' "$GRADLE"
 
       - name: Gradle configuration check
         working-directory: workos-source/QuanYiAIWorkOS
@@ -73,20 +87,18 @@ jobs:
         run: |
           APK='workos-source/QuanYiAIWorkOS/app/build/outputs/apk/release/app-release-unsigned.apk'
           test -f "$APK"
-          mkdir -p stable-output signing-tools/lib
-          cp "$APK" stable-output/QuanYiAIWorkOS-v0.3.0-stable-unsigned.apk
+          mkdir -p agent-output signing-tools/lib
+          cp "$APK" agent-output/QuanYiAIWorkOS-v0.4.0-agent-unsigned.apk
           cp "$ANDROID_HOME/build-tools/36.0.0/apksigner" signing-tools/apksigner
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tools/lib/apksigner.jar
-          cp "$ANDROID_HOME/build-tools/36.0.0/zipalign" signing-tools/zipalign
-          sha256sum stable-output/QuanYiAIWorkOS-v0.3.0-stable-unsigned.apk | tee stable-output/unsigned.sha256
-          ls -lh stable-output/* signing-tools/* signing-tools/lib/*
+          sha256sum agent-output/QuanYiAIWorkOS-v0.4.0-agent-unsigned.apk | tee agent-output/unsigned.sha256
 
-      - name: Upload migration build bundle
+      - name: Upload Agent build bundle
         uses: actions/upload-artifact@v4
         with:
-          name: QuanYiAIWorkOS-v0.3.0-stable-migration-bundle
+          name: QuanYiAIWorkOS-v0.4.0-agent-bundle
           path: |
-            stable-output/
+            agent-output/
             signing-tools/
           if-no-files-found: error
           retention-days: 30
