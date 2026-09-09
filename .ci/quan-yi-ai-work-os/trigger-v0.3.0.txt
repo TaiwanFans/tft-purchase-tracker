@@ -1,2 +1,2 @@
-Trigger v0.3.0 APK build after stable Kotlin line fix
-2026-09-08 stable compile fix
+Trigger stable migration APK rebuild
+2026-09-09 fixed package id + persistent signing preparation
