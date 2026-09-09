@@ -1,11 +1,11 @@
-name: Build QuanYi AI Work OS Agent APK v0.4.0
+name: Build QuanYi AI Work OS Agent APK v0.4.1
 
 on:
   push:
     branches:
       - quan-yi-ai-work-os-build
     paths:
-      - '.ci/quan-yi-ai-work-os/trigger-v0.4.0.txt'
+      - '.ci/quan-yi-ai-work-os/trigger-v0.4.1.txt'
   workflow_dispatch:
 
 permissions:
@@ -68,14 +68,29 @@ jobs:
           grep -q 'AgentSyncManager' app/src/main/java/tw/com/tft/aiworkos/LineNotificationListenerService.kt
           test -f app/src/main/java/tw/com/tft/aiworkos/AgentSyncManager.kt
 
-      - name: Set permanent Agent package id
+      - name: Reconstruct and verify v0.4.1 Direct Gemini patch
+        shell: bash
+        run: |
+          cat .ci/quan-yi-ai-work-os/v041-direct.patch.b64.part* > /tmp/v041.patch.b64
+          echo '26ff4a004468ab7483e053f154fbec8f01470c7594c67ccf8fc09f58b078567a  /tmp/v041.patch.b64' | sha256sum -c -
+          base64 --decode /tmp/v041.patch.b64 > /tmp/v041.patch
+          echo '6ae3dd422ca759e96da12eff14f6a283a37f6bfb205f4c90ba615421911f5e3e  /tmp/v041.patch' | sha256sum -c -
+          test "$(wc -c < /tmp/v041.patch)" = '16655'
+          cd workos-source/QuanYiAIWorkOS
+          patch -p2 < /tmp/v041.patch
+          grep -q 'versionName = "0.4.1"' app/build.gradle.kts
+          grep -q 'versionCode = 5' app/build.gradle.kts
+          grep -q 'applicationId = "tw.com.tft.aiworkos.agent"' app/build.gradle.kts
+          grep -q 'fun analyzeAgentPayload' app/src/main/java/tw/com/tft/aiworkos/AIClient.kt
+          grep -q '不再使用 Replit' app/src/main/java/tw/com/tft/aiworkos/MainActivity.kt
+
+      - name: Verify permanent Agent package id
         shell: bash
         run: |
           GRADLE='workos-source/QuanYiAIWorkOS/app/build.gradle.kts'
           STRINGS='workos-source/QuanYiAIWorkOS/app/src/main/res/values/strings.xml'
-          sed -i 's/applicationId = "tw.com.tft.aiworkos.stable"/applicationId = "tw.com.tft.aiworkos.agent"/' "$GRADLE"
-          sed -i 's#<string name="app_name">全益 AI Work OS</string>#<string name="app_name">全益 AI Work OS Agent</string>#' "$STRINGS"
           grep -q 'applicationId = "tw.com.tft.aiworkos.agent"' "$GRADLE"
+          grep -q '<string name="app_name">全益 AI Work OS Agent</string>' "$STRINGS"
 
       - name: Gradle configuration check
         working-directory: workos-source/QuanYiAIWorkOS
@@ -91,16 +106,16 @@ jobs:
           APK='workos-source/QuanYiAIWorkOS/app/build/outputs/apk/release/app-release-unsigned.apk'
           test -f "$APK"
           mkdir -p agent-output signing-tools/lib
-          cp "$APK" agent-output/QuanYiAIWorkOS-v0.4.0-agent-unsigned.apk
+          cp "$APK" agent-output/QuanYiAIWorkOS-v0.4.1-direct-gemini-agent-unsigned.apk
           cp "$ANDROID_HOME/build-tools/36.0.0/apksigner" signing-tools/apksigner
           cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tools/lib/apksigner.jar
           cp "$ANDROID_HOME/build-tools/36.0.0/zipalign" signing-tools/zipalign
-          sha256sum agent-output/QuanYiAIWorkOS-v0.4.0-agent-unsigned.apk | tee agent-output/unsigned.sha256
+          sha256sum agent-output/QuanYiAIWorkOS-v0.4.1-direct-gemini-agent-unsigned.apk | tee agent-output/unsigned.sha256
 
       - name: Upload Agent build bundle
         uses: actions/upload-artifact@v4
         with:
-          name: QuanYiAIWorkOS-v0.4.0-agent-bundle
+          name: QuanYiAIWorkOS-v0.4.1-direct-gemini-agent-bundle
           path: |
             agent-output/
             signing-tools/
