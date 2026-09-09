@@ -1,0 +1,119 @@
++                response_json TEXT NOT NULL DEFAULT '',
++                created_at INTEGER NOT NULL
++            )
++        """.trimIndent())
++        db.execSQL("CREATE INDEX IF NOT EXISTS idx_agent_sync_status ON agent_sync_queue(status, next_attempt_at, created_at)")
++        db.execSQL("CREATE INDEX IF NOT EXISTS idx_agent_events_conversation ON agent_events(conversation_key, created_at)")
+     }
+ 
+     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+@@ -184,6 +213,9 @@
+             db.execSQL("CREATE INDEX IF NOT EXISTS idx_inbox_conversation ON inbox(conversation_key, created_at)")
+             db.execSQL("CREATE INDEX IF NOT EXISTS idx_inbox_fingerprint ON inbox(event_fingerprint)")
+         }
++        if (oldVersion < 3) {
++            createAgentSyncTables(db)
++        }
+     }
+ 
+     fun addInbox(
+@@ -504,9 +536,89 @@
+         writableDatabase.insert("ai_analysis", null, v)
+     }
+ 
++    fun enqueueRecentInboxForAgent(limit: Int = 100) {
++        val ids = mutableListOf<Long>()
++        readableDatabase.rawQuery("SELECT id FROM inbox ORDER BY created_at DESC LIMIT ?", arrayOf(limit.toString())).use { c ->
++            while (c.moveToNext()) ids += c.getLong(0)
++        }
++        ids.reversed().forEach { enqueueAgentSync(it) }
++    }
++
++    fun enqueueAgentSync(inboxId: Long) {
++        val now = System.currentTimeMillis()
++        val v = ContentValues().apply {
++            put("inbox_id", inboxId); put("status", "pending"); put("attempts", 0); put("last_error", ""); put("last_response", "")
++            put("next_attempt_at", 0); put("created_at", now); put("updated_at", now)
++        }
++        writableDatabase.insertWithOnConflict("agent_sync_queue", null, v, SQLiteDatabase.CONFLICT_IGNORE)
++    }
++
++    fun nextPendingAgentSync(): AgentSyncQueueItem? {
++        val now = System.currentTimeMillis()
++        readableDatabase.rawQuery(
++            "SELECT id,inbox_id,status,attempts,last_error,next_attempt_at,created_at,updated_at FROM agent_sync_queue WHERE status IN ('pending','failed') AND next_attempt_at<=? ORDER BY created_at ASC LIMIT 1",
++            arrayOf(now.toString())
++        ).use { c ->
++            return if (c.moveToFirst()) AgentSyncQueueItem(c.getLong(0), c.getLong(1), c.getString(2), c.getInt(3), c.getString(4), c.getLong(5), c.getLong(6), c.getLong(7)) else null
++        }
++    }
++
++    fun markAgentSyncSending(id: Long) {
++        val v = ContentValues().apply { put("status", "sending"); put("updated_at", System.currentTimeMillis()) }
++        writableDatabase.update("agent_sync_queue", v, "id=?", arrayOf(id.toString()))
++    }
++
++    fun markAgentSyncSuccess(id: Long, response: String) {
++        val v = ContentValues().apply {
++            put("status", "synced"); put("last_error", ""); put("last_response", response); put("updated_at", System.currentTimeMillis())
++        }
++        writableDatabase.update("agent_sync_queue", v, "id=?", arrayOf(id.toString()))
++    }
++
++    fun markAgentSyncFailed(id: Long, error: String, permanent: Boolean = false) {
++        val attempts = readableDatabase.rawQuery("SELECT attempts FROM agent_sync_queue WHERE id=?", arrayOf(id.toString())).use { c -> if (c.moveToFirst()) c.getInt(0) + 1 else 1 }
++        val delay = when {
++            permanent -> 365L * 24 * 60 * 60 * 1000
++            attempts <= 1 -> 30_000L
++            attempts == 2 -> 2 * 60_000L
++            attempts == 3 -> 10 * 60_000L
++            else -> 60 * 60_000L
++        }
++        val v = ContentValues().apply {
++            put("status", "failed"); put("attempts", attempts); put("last_error", error.take(2000)); put("next_attempt_at", System.currentTimeMillis() + delay); put("updated_at", System.currentTimeMillis())
++        }
++        writableDatabase.update("agent_sync_queue", v, "id=?", arrayOf(id.toString()))
++    }
++
++    fun resetFailedAgentSync() {
++        val v = ContentValues().apply { put("status", "pending"); put("next_attempt_at", 0); put("updated_at", System.currentTimeMillis()) }
++        writableDatabase.update("agent_sync_queue", v, "status='failed'", null)
++    }
++
++    fun getAgentSyncStats(): AgentSyncStats {
++        var pending = 0; var failed = 0; var synced = 0; var last: Long? = null
++        readableDatabase.rawQuery("SELECT status,COUNT(*),MAX(updated_at) FROM agent_sync_queue GROUP BY status", null).use { c ->
++            while (c.moveToNext()) {
++                when (c.getString(0)) {
++                    "pending", "sending" -> pending += c.getInt(1)
++                    "failed" -> failed += c.getInt(1)
++                    "synced" -> { synced += c.getInt(1); val t = c.getLong(2); if (last == null || t > last!!) last = t }
++                }
++            }
++        }
++        return AgentSyncStats(pending, failed, synced, last)
++    }
++
++    fun addAgentEvent(inboxId: Long, conversationKey: String, requestJson: String, responseJson: String) {
++        val v = ContentValues().apply {
++            put("inbox_id", inboxId); put("conversation_key", conversationKey); put("request_json", requestJson); put("response_json", responseJson); put("created_at", System.currentTimeMillis())
++        }
++        writableDatabase.insert("agent_events", null, v)
++    }
++
+     fun exportJson(): JSONObject {
+         val root = JSONObject().put("schema_version", 1).put("exported_at", System.currentTimeMillis())
+-        listOf("inbox", "conversation_profiles", "cases", "case_messages", "checklist", "reminders", "persons", "companies", "attachments", "tasks", "ai_analysis").forEach { table ->
++        listOf("inbox", "conversation_profiles", "cases", "case_messages", "checklist", "reminders", "persons", "companies", "attachments", "tasks", "ai_analysis", "agent_sync_queue", "agent_events").forEach { table ->
+             val arr = JSONArray()
+             readableDatabase.rawQuery("SELECT * FROM $table", null).use { c ->
+                 while (c.moveToNext()) {
+@@ -543,7 +655,7 @@
+     }
+ 
+     fun importJson(root: JSONObject) {
+-        val tables = listOf("inbox", "conversation_profiles", "cases", "case_messages", "checklist", "reminders", "persons", "companies", "attachments", "tasks", "ai_analysis")
++        val tables = listOf("inbox", "conversation_profiles", "cases", "case_messages", "checklist", "reminders", "persons", "companies", "attachments", "tasks", "ai_analysis", "agent_sync_queue", "agent_events")
+         writableDatabase.beginTransaction()
+         try {
+             tables.reversed().forEach { writableDatabase.delete(it, null, null) }
