@@ -54,20 +54,55 @@ jobs:
           FILE='workos-source/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/MainActivity.kt'
           sed -i '559,561c\                        .setMessage(if (r.ok) "${secure.providerDisplayName()} / ${secure.modelName}\\n\\n${r.content.take(300)}" else r.error)' "$FILE"
 
-      - name: Diagnose v0.4 patch transfer
+      - name: Reconstruct and verify v0.4 Agent patch
         shell: bash
         run: |
-          for f in .ci/quan-yi-ai-work-os/v04line.patch.part*; do
-            echo "FILE=$f BYTES=$(wc -c < "$f")"
-            sha256sum "$f"
-          done
-          cat .ci/quan-yi-ai-work-os/v04line.patch.part* > /tmp/v04.patch
-          echo "CONCAT_BYTES=$(wc -c < /tmp/v04.patch)"
-          sha256sum /tmp/v04.patch
-          echo 'EXPECTED:'
-          echo 'part00 6556 14ffaed7d8494365911ea7dfdc316b405aba2854a6d7d565b9fa4119e005640a'
-          echo 'part01 9012 b0fb7d4e61890641a325c38c52881a2399ccdbfbf944164b1fb7939e9bdcbe0f'
-          echo 'part02 7305 3d769d39609454ee99541b551e10a8ba1f202c064f6a9b21932652378b39b94a'
-          echo 'part03 6564 ac0ec5137dbbcad901d231b77344f7db3b4dfc89b2ff540aaca6d3d8e247d912'
-          echo 'concat 29437 dde34fcfd37b9fe65461dec35e153bd7fd1e44f01d13525b597031442a77d12e'
-          exit 1
+          cat .ci/quan-yi-ai-work-os/v04line.patch.part00 .ci/quan-yi-ai-work-os/v04line.patch.part01 > /tmp/v04.patch
+          base64 --decode .ci/quan-yi-ai-work-os/v04line.patch.part02.b64 >> /tmp/v04.patch
+          cat .ci/quan-yi-ai-work-os/v04line.patch.part03 >> /tmp/v04.patch
+          echo 'dde34fcfd37b9fe65461dec35e153bd7fd1e44f01d13525b597031442a77d12e  /tmp/v04.patch' | sha256sum -c -
+          test "$(wc -c < /tmp/v04.patch)" = '29437'
+          cd workos-source/QuanYiAIWorkOS
+          patch -p1 < /tmp/v04.patch
+          grep -q 'versionName = "0.4.0"' app/build.gradle.kts
+          grep -q 'AgentSyncManager' app/src/main/java/tw/com/tft/aiworkos/LineNotificationListenerService.kt
+          test -f app/src/main/java/tw/com/tft/aiworkos/AgentSyncManager.kt
+
+      - name: Set permanent Agent package id
+        shell: bash
+        run: |
+          GRADLE='workos-source/QuanYiAIWorkOS/app/build.gradle.kts'
+          STRINGS='workos-source/QuanYiAIWorkOS/app/src/main/res/values/strings.xml'
+          sed -i 's/applicationId = "tw.com.tft.aiworkos.stable"/applicationId = "tw.com.tft.aiworkos.agent"/' "$GRADLE"
+          sed -i 's#<string name="app_name">全益 AI Work OS</string>#<string name="app_name">全益 AI Work OS Agent</string>#' "$STRINGS"
+          grep -q 'applicationId = "tw.com.tft.aiworkos.agent"' "$GRADLE"
+
+      - name: Gradle configuration check
+        working-directory: workos-source/QuanYiAIWorkOS
+        run: gradle help --stacktrace
+
+      - name: Build unsigned Release APK
+        working-directory: workos-source/QuanYiAIWorkOS
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Collect APK and signing tools
+        shell: bash
+        run: |
+          APK='workos-source/QuanYiAIWorkOS/app/build/outputs/apk/release/app-release-unsigned.apk'
+          test -f "$APK"
+          mkdir -p agent-output signing-tools/lib
+          cp "$APK" agent-output/QuanYiAIWorkOS-v0.4.0-agent-unsigned.apk
+          cp "$ANDROID_HOME/build-tools/36.0.0/apksigner" signing-tools/apksigner
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tools/lib/apksigner.jar
+          cp "$ANDROID_HOME/build-tools/36.0.0/zipalign" signing-tools/zipalign
+          sha256sum agent-output/QuanYiAIWorkOS-v0.4.0-agent-unsigned.apk | tee agent-output/unsigned.sha256
+
+      - name: Upload Agent build bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuanYiAIWorkOS-v0.4.0-agent-bundle
+          path: |
+            agent-output/
+            signing-tools/
+          if-no-files-found: error
+          retention-days: 30
