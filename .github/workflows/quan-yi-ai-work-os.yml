@@ -1,4 +1,4 @@
-name: Build QuanYi AI Work OS APK v0.3.0
+name: Build QuanYi AI Work OS Stable Migration APK
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 jobs:
-  build-debug-apk:
+  build-stable-migration:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -47,40 +47,46 @@ jobs:
           rm -rf workos-source
           mkdir -p workos-source
           unzip -q /tmp/QuanYiAIWorkOS-v0.3.0.zip -d workos-source
-          test -f workos-source/QuanYiAIWorkOS/settings.gradle.kts
-          test -f workos-source/QuanYiAIWorkOS/app/build.gradle.kts
-          grep -q 'versionName = "0.3.0"' workos-source/QuanYiAIWorkOS/app/build.gradle.kts
-          grep -q 'getConversationBundles' workos-source/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/WorkOSDatabase.kt
-          grep -q 'analyzeConversation' workos-source/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/AIClient.kt
 
-      - name: Apply verified Kotlin syntax fix
+      - name: Apply Kotlin fix and stable package id
         shell: bash
         run: |
           FILE='workos-source/QuanYiAIWorkOS/app/src/main/java/tw/com/tft/aiworkos/MainActivity.kt'
           sed -i '559,561c\                        .setMessage(if (r.ok) "${secure.providerDisplayName()} / ${secure.modelName}\\n\\n${r.content.take(300)}" else r.error)' "$FILE"
-          sed -n '556,563p' "$FILE"
+          GRADLE='workos-source/QuanYiAIWorkOS/app/build.gradle.kts'
+          sed -i 's/applicationId = "tw.com.tft.aiworkos"/applicationId = "tw.com.tft.aiworkos.stable"/' "$GRADLE"
+          STRINGS='workos-source/QuanYiAIWorkOS/app/src/main/res/values/strings.xml'
+          sed -i 's#<string name="app_name">全益 AI Work OS</string>#<string name="app_name">全益 AI Work OS 新版</string>#' "$STRINGS"
+          grep -q 'applicationId = "tw.com.tft.aiworkos.stable"' "$GRADLE"
+          grep -q '全益 AI Work OS 新版' "$STRINGS"
 
       - name: Gradle configuration check
         working-directory: workos-source/QuanYiAIWorkOS
         run: gradle help --stacktrace
 
-      - name: Build Debug APK
+      - name: Build unsigned Release APK
         working-directory: workos-source/QuanYiAIWorkOS
-        run: gradle :app:assembleDebug --stacktrace
+        run: gradle :app:assembleRelease --stacktrace
 
-      - name: Verify APK exists
+      - name: Collect APK and signing tools
+        shell: bash
         run: |
-          APK='workos-source/QuanYiAIWorkOS/app/build/outputs/apk/debug/app-debug.apk'
+          APK='workos-source/QuanYiAIWorkOS/app/build/outputs/apk/release/app-release-unsigned.apk'
           test -f "$APK"
-          ls -lh "$APK"
-          sha256sum "$APK" | tee app-debug.sha256
+          mkdir -p stable-output signing-tools/lib
+          cp "$APK" stable-output/QuanYiAIWorkOS-v0.3.0-stable-unsigned.apk
+          cp "$ANDROID_HOME/build-tools/36.0.0/apksigner" signing-tools/apksigner
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" signing-tools/lib/apksigner.jar
+          cp "$ANDROID_HOME/build-tools/36.0.0/zipalign" signing-tools/zipalign
+          sha256sum stable-output/QuanYiAIWorkOS-v0.3.0-stable-unsigned.apk | tee stable-output/unsigned.sha256
+          ls -lh stable-output/* signing-tools/* signing-tools/lib/*
 
-      - name: Upload Debug APK
+      - name: Upload migration build bundle
         uses: actions/upload-artifact@v4
         with:
-          name: QuanYiAIWorkOS-v0.3.0-debug-apk
+          name: QuanYiAIWorkOS-v0.3.0-stable-migration-bundle
           path: |
-            workos-source/QuanYiAIWorkOS/app/build/outputs/apk/debug/app-debug.apk
-            app-debug.sha256
+            stable-output/
+            signing-tools/
           if-no-files-found: error
           retention-days: 30
