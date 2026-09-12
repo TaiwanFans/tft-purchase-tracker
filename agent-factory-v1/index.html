@@ -3,25 +3,26 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-<meta name="theme-color" content="#0d1721" />
-<title>Agent Factory｜AI 自媒體工廠</title>
-<meta name="description" content="一款把 Hermes Agent、n8n、Cron、人工審核與自媒體工作流變成遊戲的互動式教學網站。" />
+<meta name="theme-color" content="#150f2d" />
+<title>Agent Factory V2｜AI 自媒體工廠</title>
+<meta name="description" content="一款把 Hermes Agent、n8n、Cron、人工審核與自媒體工作流變成遊戲的互動式教學網站。電腦與手機都能玩。" />
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="v2.css">
 </head>
 <body>
 <div id="app">
 <section class="splash" id="splash">
   <div class="factory-hero">
     <div class="hero-copy">
-      <span class="badge">🎮 AI WORKFLOW SIMULATION</span>
-      <h1>你以為 AI 會幫你工作？<br><em>其實它只是在等你下一句。</em></h1>
-      <p>歡迎來到 <b>Agent Factory</b>。你要經營一間 AI 自媒體公司：接任務、安排 Hermes、n8n、Cron 與人工審核，讓工作真的自己往下跑。</p>
-      <div class="hook"><b>你的目標：</b>把「每天重複做」變成「每天自動完成」。</div>
-      <div class="hero-actions"><button class="primary" id="startGame">開始經營 AI 公司 →</button><button class="secondary" id="quickDemo">先看 60 秒 Demo</button></div>
-      <div class="hero-foot"><span>不需要寫程式</span><span>每關 2～4 分鐘</span><span>做錯會直接看到塞車原因</span></div>
+      <span class="badge">🎮 AGENT FACTORY V2 · COLOR RUSH</span>
+      <h1>別再只是問 AI。<br><em>把它們變成一間會自己運轉的公司。</em></h1>
+      <p>接任務、派工作站、看任務方塊沿著管線跑。Hermes 負責思考，n8n 負責執行，Cron 負責準時叫醒流程——你會在玩的過程裡自然學會 Agent。</p>
+      <div class="hook"><b>V2 升級：</b>更鮮豔的遊戲配色、Combo、PARTY BOOST、小機器人、成功爆點、手機震動、合成音效與電腦快捷鍵。</div>
+      <div class="hero-actions"><button class="primary" id="startGame">🚀 開始經營 AI 公司</button><button class="secondary" id="quickDemo">⚡ 先看 60 秒 Demo</button></div>
+      <div class="hero-foot"><span>📱 手機可玩</span><span>⌨️ 電腦快捷鍵</span><span>🔊 遊戲音效</span><span>✨ 動態工廠</span></div>
     </div>
     <div class="factory-preview glass" aria-hidden="true">
-      <div class="preview-top"><b>AI MEDIA STUDIO · LIVE</b><span class="live"><i></i>系統運作中</span></div>
+      <div class="preview-top"><b>AI MEDIA STUDIO · LIVE</b><span class="live"><i></i>任務流動中</span></div>
       <div class="preview-floor">
         <div class="source"><div class="station-icon">📥</div><b>任務入口</b><span>AI 新聞需求</span></div>
         <div class="station-preview s1"><div class="station-icon">🧠</div><strong>Hermes</strong><span>研究 / 判斷</span></div>
@@ -79,5 +80,6 @@
 <div class="tutorial" id="tutorial"><div class="spotlight" id="spotlight"></div><div class="coach" id="coach"><b></b><p></p><button id="coachNext">知道了 →</button></div></div>
 </div>
 <script src="game.js"></script>
+<script src="v2.js"></script>
 </body>
 </html>
