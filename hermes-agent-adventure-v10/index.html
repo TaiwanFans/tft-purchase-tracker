@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#081526">
+  <title>Hermes AI Agent 冒險 V10｜AI 自媒體城</title>
+  <meta name="description" content="真正可玩的 Agent 教學 RPG：自由探索 AI 自媒體城、與 NPC 對話、解主線任務、學會 Hermes、ChatGPT、n8n 與 AI 工作流。">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="app">
+    <section id="splash" class="splash">
+      <img class="splash-art" src="" data-concept="1" alt="AI 自媒體城概念美術">
+      <div class="splash-shade"></div>
+      <div class="splash-copy">
+        <span class="version-pill">V10 PLAYABLE BUILD</span>
+        <h1>你真的懂 <em>Agent</em> 是什麼嗎？</h1>
+        <p>別再讀定義。進入 AI 自媒體城，走一次、問一次、做一次，你就會懂 Hermes、n8n 和自動化到底怎麼合作。</p>
+        <div class="splash-actions">
+          <button id="startBtn" class="primary-btn">開始冒險</button>
+          <button id="continueBtn" class="soft-btn">繼續上次進度</button>
+        </div>
+        <small>電腦：WASD / 方向鍵移動，E 對話　｜　手機：左下方向鍵＋右下 A 鍵</small>
+      </div>
+    </section>
+
+    <section id="gameShell" class="game-shell" aria-label="Hermes AI Agent 冒險遊戲"><img class="game-fallback-art" src="" data-concept="1" alt="AI 自媒體城遊戲視覺"><div class="live-badge">V10 LIVE</div>
+      <canvas id="gameCanvas" width="1600" height="900"></canvas>
+      <canvas id="miniMap" width="220" height="150"></canvas>
+
+      <div class="hud hud-player">
+        <div class="portrait pixel-portrait"><span>AI</span></div>
+        <div class="hud-player-copy">
+          <div class="hud-line"><b id="playerLevel">Lv. 1</b><strong id="playerTitle">AI 見習旅人</strong></div>
+          <div class="bar-row"><span>HP</span><div class="bar"><i class="hp-fill"></i></div><b>120 / 120</b></div>
+          <div class="bar-row"><span>EXP</span><div class="bar"><i id="expFill" class="exp-fill"></i></div><b id="expText">0 / 100</b></div>
+        </div>
+      </div>
+
+      <div class="hud slogan-box">用 AI 創造<br>更好的自己！<br><span>Let's Go! ▸</span></div>
+
+      <div class="top-menu">
+        <button data-panel="bag">🎒<span>背包</span></button>
+        <button data-panel="dex">📕<span>圖鑑</span></button>
+        <button data-panel="achieve">🏆<span>成就</span></button>
+        <button data-panel="settings">⚙️<span>設定</span></button>
+      </div>
+
+      <aside class="hud quest-panel">
+        <div class="panel-title">❗ 主線任務</div>
+        <strong id="questName">學會打造第一個 AI 工作流</strong>
+        <ul id="questList"></ul>
+      </aside>
+
+      <aside class="hud minimap-panel">
+        <div class="minimap-head"><b>AI 自媒體城地圖</b><span>N ▲</span></div>
+        <div class="explore-row">探索度 <b id="explorePct">0%</b></div>
+      </aside>
+
+      <div class="right-banner"><span>學習</span><span>實作</span><span>分享</span><span>改變</span><b>♥</b></div>
+
+      <div id="interactHint" class="interact-hint"><kbd>E</kbd><span>對話</span></div>
+      <div id="areaBanner" class="area-banner"></div>
+      <div id="toast" class="toast"></div>
+
+      <div id="dialogue" class="dialogue hidden">
+        <div id="speakerAvatar" class="speaker-avatar"></div>
+        <div class="dialogue-main">
+          <div class="dialogue-name" id="speakerName"></div>
+          <div class="dialogue-text" id="dialogueText"></div>
+        </div>
+        <button id="dialogueNext" class="dialogue-next">▼</button>
+      </div>
+
+      <div id="panel" class="modal-panel hidden">
+        <div class="modal-card">
+          <button id="panelClose" class="panel-close">×</button>
+          <div id="panelContent"></div>
+        </div>
+      </div>
+
+      <div id="battle" class="modal-panel hidden">
+        <div class="battle-card">
+          <button id="battleClose" class="panel-close">×</button>
+          <div class="battle-monster">👾</div>
+          <h2>重複工作怪出現了！</h2>
+          <p id="battleQuestion"></p>
+          <div class="battle-actions">
+            <button data-answer="hermes">🧠 交給 Hermes</button>
+            <button data-answer="n8n">🔗 交給 n8n</button>
+          </div>
+          <div id="battleFeedback" class="battle-feedback"></div>
+          <div class="monster-hp"><i id="monsterHp"></i></div>
+        </div>
+      </div>
+
+      <div class="mobile-controls">
+        <div class="dpad">
+          <button data-dir="up">▲</button>
+          <button data-dir="left">◀</button>
+          <button data-dir="right">▶</button>
+          <button data-dir="down">▼</button>
+        </div>
+        <button id="mobileAction" class="action-a">A</button>
+      </div>
+    </section>
+  </main>
+  <script src="concept1.js"></script><script src="concept2.js"></script><script src="concept3.js"></script><script src="game1.js"></script><script src="game2.js"></script><script src="game3.js"></script><script src="boot.js"></script>
+</body>
+</html>
