@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#07162a">
+  <title>Hermes AI Agent 冒險 V11｜AI 自媒體城</title>
+  <meta name="description" content="可玩的 AI Agent 教學 RPG：走地圖、和 NPC 對話、解任務、打倒重複工作怪，理解 Hermes、ChatGPT、n8n 與自媒體自動化。">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main id="app">
+    <section id="splash" class="splash">
+      <img class="splash-art" data-concept src="" alt="AI 自媒體城概念美術">
+      <div class="splash-shade"></div>
+      <div class="splash-copy">
+        <span class="version-pill">V11 · REAL PLAYABLE BUILD</span>
+        <h1>如果 AI 只會聊天，<br><em>它還不是你的員工。</em></h1>
+        <p>進入 AI 自媒體城。用走路、NPC 對話、任務與小挑戰，在不背術語的情況下搞懂 Hermes、ChatGPT、n8n 和自動化到底怎麼合作。</p>
+        <div class="splash-actions">
+          <button id="startBtn" class="primary-btn" type="button">🎮 開始新冒險</button>
+          <button id="continueBtn" class="soft-btn" type="button">▶ 繼續上次進度</button>
+        </div>
+        <div class="control-help"><span>電腦：WASD / 方向鍵</span><span>E：對話 / 互動</span><span>手機：方向鍵＋A</span></div>
+      </div>
+      <div class="splash-callout"><b>這次是真的遊戲</b><span>四方向 Walk Cycle · NPC 走動 · 表情 · 碰撞 · 室內場景 · Boss 挑戰</span></div>
+    </section>
+
+    <section id="gameShell" class="game-shell" aria-label="Hermes AI Agent 冒險遊戲">
+      <div id="bootStatus" class="boot-status">正在啟動 AI 自媒體城…</div>
+      <canvas id="gameCanvas" width="1600" height="900" aria-label="遊戲地圖"></canvas>
+      <canvas id="miniMap" width="220" height="150" aria-label="迷你地圖"></canvas>
+
+      <div class="hud hud-player">
+        <div class="portrait pixel-portrait"><span>AI</span></div>
+        <div class="hud-player-copy">
+          <div class="hud-line"><b id="playerLevel">Lv. 1</b><strong id="playerTitle">AI 見習旅人</strong></div>
+          <div class="bar-row"><span>HP</span><div class="bar"><i class="hp-fill"></i></div><b>120 / 120</b></div>
+          <div class="bar-row"><span>EXP</span><div class="bar"><i id="expFill" class="exp-fill"></i></div><b id="expText">0 / 100</b></div>
+        </div>
+      </div>
+
+      <div class="hud slogan-box">用 AI 創造<br>更好的自己！<br><span>Let's Go! ▸</span></div>
+
+      <div class="top-menu" aria-label="遊戲選單">
+        <button data-panel="bag" type="button">🎒<span>背包</span></button>
+        <button data-panel="dex" type="button">📕<span>圖鑑</span></button>
+        <button data-panel="achieve" type="button">🏆<span>成就</span></button>
+        <button data-panel="settings" type="button">⚙️<span>設定</span></button>
+      </div>
+
+      <aside class="hud quest-panel">
+        <div class="panel-title">❗ 主線任務</div>
+        <strong id="questName">理解你的第一個 AI 工作流</strong>
+        <ul id="questList"></ul>
+      </aside>
+
+      <aside class="hud minimap-panel">
+        <div class="minimap-head"><b>AI 自媒體城地圖</b><span>N ▲</span></div>
+        <div class="explore-row">探索度 <b id="explorePct">0%</b></div>
+      </aside>
+
+      <div class="right-banner"><span>學習</span><span>實作</span><span>探索</span><span>升級</span><b>♥</b></div>
+      <div id="interactHint" class="interact-hint"><kbd>E</kbd><span>對話</span></div>
+      <div id="areaBanner" class="area-banner"></div>
+      <div id="toast" class="toast"></div>
+
+      <div id="dialogue" class="dialogue hidden" role="dialog" aria-modal="true">
+        <div id="speakerAvatar" class="speaker-avatar"></div>
+        <div class="dialogue-main">
+          <div class="dialogue-name" id="speakerName"></div>
+          <div class="dialogue-text" id="dialogueText"></div>
+          <div id="dialogueMood" class="dialogue-mood"></div>
+        </div>
+        <button id="dialogueNext" class="dialogue-next" type="button" aria-label="下一句">▼</button>
+      </div>
+
+      <div id="panel" class="modal-panel hidden" role="dialog" aria-modal="true">
+        <div class="modal-card">
+          <button id="panelClose" class="panel-close" type="button">×</button>
+          <div id="panelContent"></div>
+        </div>
+      </div>
+
+      <div id="battle" class="modal-panel hidden" role="dialog" aria-modal="true">
+        <div class="battle-card">
+          <button id="battleClose" class="panel-close" type="button">×</button>
+          <div class="battle-monster">👾</div>
+          <h2>重複工作怪出現了！</h2>
+          <p id="battleQuestion"></p>
+          <div class="battle-actions">
+            <button data-answer="hermes" type="button">🧠 交給 Hermes</button>
+            <button data-answer="n8n" type="button">🔗 交給 n8n</button>
+          </div>
+          <div id="battleFeedback" class="battle-feedback"></div>
+          <div class="monster-hp"><i id="monsterHp"></i></div>
+        </div>
+      </div>
+
+      <div class="mobile-controls" aria-label="手機控制器">
+        <div class="dpad">
+          <button data-dir="up" type="button">▲</button>
+          <button data-dir="left" type="button">◀</button>
+          <button data-dir="right" type="button">▶</button>
+          <button data-dir="down" type="button">▼</button>
+        </div>
+        <button id="mobileAction" class="action-a" type="button">A</button>
+      </div>
+    </section>
+  </main>
+  <script src="../hermes-agent-adventure-v10/concept1.js"></script>
+  <script src="../hermes-agent-adventure-v10/concept2.js"></script>
+  <script src="../hermes-agent-adventure-v10/concept3.js"></script>
+  <script src="concept-loader.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
