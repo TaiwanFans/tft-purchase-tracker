@@ -1,0 +1,2 @@
+document.querySelectorAll('.faqQ').forEach(q=>q.addEventListener('click',()=>q.parentElement.classList.toggle('open')));
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)e.target.classList.add('in')}),{threshold:.08});document.querySelectorAll('.reveal').forEach(x=>io.observe(x));
