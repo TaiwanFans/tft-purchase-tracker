@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#15253a">
+  <title>Agent 彈射學院｜玩著搞懂 Hermes × n8n</title>
+  <meta name="description" content="用角度、力度與彈射闖關理解 Hermes Agent、ChatGPT、n8n 與自媒體自動化。">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app" id="app">
+    <section class="screen active" id="introScreen" aria-labelledby="introTitle">
+      <div class="hero-copy">
+        <span class="eyebrow">AGENT CANNON ACADEMY · PLAYABLE LEARNING</span>
+        <h1 id="introTitle">你每天還在手動做的事，<br><em>其實可以一砲交給 AI。</em></h1>
+        <p>不用先背 Agent、API、n8n。先用「發射、命中、闖關」玩懂：什麼工作該交給 Hermes，什麼工作該交給 n8n。</p>
+        <div class="hero-actions">
+          <button class="primary" id="startGameBtn" type="button">🎯 開始第一關</button>
+          <button class="secondary" id="howBtn" type="button">玩法 30 秒看懂</button>
+        </div>
+        <div class="hero-pills">
+          <span>✓ 完全外行也能玩</span><span>✓ 電腦 / 手機</span><span>✓ 每關 2–4 分鐘</span>
+        </div>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="sky-orb orb-a"></div><div class="sky-orb orb-b"></div>
+        <div class="island island-a"><span>🧠</span><b>Hermes 島</b></div>
+        <div class="island island-b"><span>🔗</span><b>n8n 工坊</b></div>
+        <div class="launcher-demo"><div class="demo-char">🧑‍🚀</div><div class="demo-cannon">◢</div></div>
+        <div class="arc-demo"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="target-demo">👾<small>重複工作怪</small></div>
+      </div>
+      <div class="intro-how hidden" id="introHow">
+        <button id="howClose" type="button" aria-label="關閉">×</button>
+        <div><b>① 選砲彈</b><span>Hermes、n8n、ChatGPT 代表不同能力。</span></div>
+        <div><b>② 調角度與力度</b><span>看拋物線預覽，命中任務怪物。</span></div>
+        <div><b>③ 命中也要「概念正確」</b><span>用對 AI / 工具才能真正造成傷害。</span></div>
+      </div>
+    </section>
+
+    <section class="screen" id="mapScreen" aria-labelledby="mapTitle">
+      <header class="topbar">
+        <div class="brand"><span>◉</span><div><b>Agent 彈射學院</b><small>Hermes × n8n</small></div></div>
+        <div class="player-mini"><span id="mapXp">Lv.1 · 0 XP</span><span id="mapStars">⭐ 0</span></div>
+      </header>
+      <div class="map-head">
+        <div><span class="eyebrow">WORLD MAP</span><h2 id="mapTitle">AI 自媒體群島</h2><p>每一座島只教一件事。打過去，你就懂。</p></div>
+        <button class="ghost" id="resetBtn" type="button">重新開始</button>
+      </div>
+      <div class="level-map" id="levelMap"></div>
+    </section>
+
+    <section class="screen" id="gameScreen" aria-label="彈射闖關遊戲">
+      <header class="game-topbar">
+        <button class="icon-btn" id="backMapBtn" type="button" aria-label="回關卡地圖">←</button>
+        <div class="stage-meta"><span id="stageNo">STAGE 1</span><b id="stageTitle">Agent 新手村</b></div>
+        <div class="hud-chip">⭐ <b id="hudStars">0</b></div>
+        <div class="hud-chip">XP <b id="hudXp">0</b></div>
+        <button class="icon-btn" id="soundBtn" type="button" aria-label="音效">🔊</button>
+      </header>
+
+      <div class="lesson-strip" id="lessonStrip">
+        <div class="mentor-face" id="mentorFace">🧙‍♂️</div>
+        <div><span id="lessonKicker">這一關只要懂一件事</span><b id="lessonText">Hermes 比較像「會做事的 AI 員工」。</b></div>
+        <button id="lessonDismiss" type="button">知道了</button>
+      </div>
+
+      <div class="battlefield-wrap">
+        <canvas id="gameCanvas" width="1200" height="675" aria-label="彈射戰場"></canvas>
+        <div class="wind-box"><span>風向</span><b id="windText">→ 0</b></div>
+        <div class="enemy-card" id="enemyCard"><span id="enemyEmoji">👾</span><div><small>任務怪物</small><b id="enemyTask">比較 10 則 AI 新聞，挑出今天最值得做的一題。</b><div class="hp"><i id="enemyHpFill"></i></div></div></div>
+        <div class="result-pop hidden" id="resultPop"><b id="resultTitle">命中！</b><span id="resultText"></span></div>
+      </div>
+
+      <div class="control-panel">
+        <div class="ammo-panel">
+          <div class="control-label"><b>1. 選能力砲彈</b><span id="ammoHint">先想：這件事需要「思考」還是「搬資料」？</span></div>
+          <div class="ammo-row" id="ammoRow"></div>
+        </div>
+        <div class="aim-panel">
+          <div class="slider-block"><label for="angleRange"><b>2. 角度</b><output id="angleOut">45°</output></label><input id="angleRange" type="range" min="15" max="80" value="45"></div>
+          <div class="slider-block"><label for="powerRange"><b>3. 力度</b><output id="powerOut">62%</output></label><input id="powerRange" type="range" min="25" max="100" value="62"></div>
+          <div class="assist-row"><button class="assist" id="assistBtn" type="button">✨ 瞄準提示</button><span id="assistText">第一次玩？可以先用提示。</span></div>
+        </div>
+        <div class="fire-panel">
+          <button class="fire-btn" id="fireBtn" type="button"><span>🚀</span><b>發射！</b><small>SPACE</small></button>
+        </div>
+      </div>
+      <div class="mobile-note">手機：滑動角度 / 力度後點「發射」即可，不需要鍵盤。</div>
+    </section>
+
+    <section class="screen" id="clearScreen" aria-labelledby="clearTitle">
+      <div class="clear-card">
+        <div class="clear-burst">✦</div>
+        <span class="eyebrow">STAGE CLEAR</span>
+        <h2 id="clearTitle">過關！你剛剛其實學會了一個 Agent 概念。</h2>
+        <div class="stars" id="clearStars">⭐⭐⭐</div>
+        <div class="learning-summary" id="learningSummary"></div>
+        <div class="reward-row"><span>🏅 <b id="rewardBadge">Agent 新兵</b></span><span>+ <b id="rewardXp">40 XP</b></span></div>
+        <div class="clear-actions"><button class="secondary" id="clearMapBtn" type="button">回關卡地圖</button><button class="primary" id="nextStageBtn" type="button">下一關 →</button></div>
+      </div>
+    </section>
+  </main>
+  <script src="game.js"></script>
+</body>
+</html>
