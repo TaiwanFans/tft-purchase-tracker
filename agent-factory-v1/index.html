@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="theme-color" content="#0d1721" />
+<title>Agent Factory｜AI 自媒體工廠</title>
+<meta name="description" content="一款把 Hermes Agent、n8n、Cron、人工審核與自媒體工作流變成遊戲的互動式教學網站。" />
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+<section class="splash" id="splash">
+  <div class="factory-hero">
+    <div class="hero-copy">
+      <span class="badge">🎮 AI WORKFLOW SIMULATION</span>
+      <h1>你以為 AI 會幫你工作？<br><em>其實它只是在等你下一句。</em></h1>
+      <p>歡迎來到 <b>Agent Factory</b>。你要經營一間 AI 自媒體公司：接任務、安排 Hermes、n8n、Cron 與人工審核，讓工作真的自己往下跑。</p>
+      <div class="hook"><b>你的目標：</b>把「每天重複做」變成「每天自動完成」。</div>
+      <div class="hero-actions"><button class="primary" id="startGame">開始經營 AI 公司 →</button><button class="secondary" id="quickDemo">先看 60 秒 Demo</button></div>
+      <div class="hero-foot"><span>不需要寫程式</span><span>每關 2～4 分鐘</span><span>做錯會直接看到塞車原因</span></div>
+    </div>
+    <div class="factory-preview glass" aria-hidden="true">
+      <div class="preview-top"><b>AI MEDIA STUDIO · LIVE</b><span class="live"><i></i>系統運作中</span></div>
+      <div class="preview-floor">
+        <div class="source"><div class="station-icon">📥</div><b>任務入口</b><span>AI 新聞需求</span></div>
+        <div class="station-preview s1"><div class="station-icon">🧠</div><strong>Hermes</strong><span>研究 / 判斷</span></div>
+        <div class="station-preview s2"><div class="station-icon">✍️</div><strong>Writer</strong><span>產生內容</span></div>
+        <div class="station-preview s3"><div class="station-icon">🔗</div><strong>n8n</strong><span>串接工具</span></div>
+        <div class="sink"><div class="station-icon">📲</div><b>完成</b><span>Notion + Telegram</span></div>
+        <div class="conveyor cv1"></div><div class="conveyor cv2"></div><div class="conveyor cv3"></div><div class="conveyor cv4"></div><div class="conveyor cv5"></div>
+        <div class="task-cube">AI</div>
+        <div class="robot"><div class="robot-head"></div><div class="robot-body"></div><div class="robot-arm a"></div><div class="robot-arm b"></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="game" id="game">
+  <header class="topbar glass">
+    <div class="brand">🏭 Agent Factory</div>
+    <div class="stat">Lv. <b id="levelNum">1</b></div><div class="stat">⭐ <b id="stars">0</b></div><div class="stat">💰 <b id="coins">320</b></div><div class="stat hide-mobile">🔥 連勝 <b id="streak">0</b></div>
+    <div class="top-stats"><button class="sound-btn" id="soundBtn" title="音效">🔊</button></div>
+  </header>
+  <aside class="sidebar glass">
+    <div class="mission-head">CURRENT MISSION</div>
+    <h2 class="mission-title" id="missionTitle">第 1 關｜只會回答，算 Agent 嗎？</h2>
+    <p class="mission-desc" id="missionDesc"></p>
+    <div class="level-map" id="levelMap"></div>
+    <div class="lesson-note" id="lessonNote"><b>這關想偷偷教你的事</b><span></span></div>
+  </aside>
+  <main class="center">
+    <div class="factory" id="factory">
+      <div class="factory-grid"></div><div class="factory-zone">LIVE FACTORY FLOOR</div>
+      <div class="pipeline" id="pipeline">
+        <div class="terminal" id="sourceTerminal"><div class="big">📥</div><b>任務入口</b><span id="sourceLabel">今日 IG 文案</span></div>
+        <div class="slot empty" data-slot="0"></div><div class="slot empty" data-slot="1"></div><div class="slot empty" data-slot="2"></div><div class="slot empty" data-slot="3"></div><div class="slot empty" data-slot="4"></div>
+        <div class="terminal" id="sinkTerminal"><div class="big">🎯</div><b>任務完成</b><span id="sinkLabel">交付成果</span></div>
+      </div>
+      <div class="task-token" id="taskToken">📦</div>
+      <div class="bottleneck" id="bottleneck">把工作站放進管線，再按 RUN。</div>
+      <div class="factory-fx" id="factoryFx"></div>
+    </div>
+  </main>
+  <aside class="rightbar glass">
+    <div>
+      <h3>📥 今日任務佇列</h3>
+      <div class="queue" id="queue"></div>
+      <div class="meter"><div class="meter-head"><span>自動化效率</span><b id="efficiencyText">25%</b></div><div class="meter-bar"><i id="efficiencyBar"></i></div></div>
+      <div class="agentpedia"><h3>📚 Agentpedia</h3><div class="pedia-grid" id="pedia"></div></div>
+    </div>
+    <div class="run-area">
+      <button class="run-btn" id="runBtn">▶ RUN 工作流</button><button class="clear-btn" id="clearBtn">清空管線</button>
+      <div class="result-card" id="resultCard"><b></b><p></p></div>
+    </div>
+  </aside>
+  <footer class="palette glass" id="palette"><span class="palette-label">工作站</span></footer>
+</section>
+<div class="modal" id="completeModal"><div class="modal-card glass"><div class="stars" id="modalStars">⭐⭐⭐</div><h2 id="modalTitle">任務完成！</h2><p id="modalText"></p><div class="unlock" id="unlocks"></div><div class="modal-actions"><button class="next-btn" id="nextLevel">下一關 →</button><button class="replay-btn" id="replayLevel">再玩一次</button></div></div></div>
+<div class="tutorial" id="tutorial"><div class="spotlight" id="spotlight"></div><div class="coach" id="coach"><b></b><p></p><button id="coachNext">知道了 →</button></div></div>
+</div>
+<script src="game.js"></script>
+</body>
+</html>
