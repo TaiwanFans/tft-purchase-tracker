@@ -1,0 +1,1 @@
+(()=>{try{if(window.__CONCEPT){const u='data:image/jpeg;base64,'+window.__CONCEPT;document.querySelectorAll('[data-concept]').forEach(x=>x.src=u);const g=document.getElementById('gameShell');if(g)g.style.backgroundImage='linear-gradient(rgba(3,12,23,.45),rgba(3,12,23,.45)),url('+u+')'}}catch(e){console.warn('concept art fallback',e)}})();
