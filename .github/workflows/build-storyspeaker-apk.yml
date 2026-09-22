@@ -20,8 +20,8 @@ jobs:
         working-directory: StorySpeakerAndroid
         run: gradle :app:assembleDebug --no-daemon
       - name: Rename APK
-        run: cp StorySpeakerAndroid/app/build/outputs/apk/debug/app-debug.apk StorySpeaker-v1.0.apk
+        run: cp StorySpeakerAndroid/app/build/outputs/apk/debug/app-debug.apk StorySpeaker-v1.1-UI.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: StorySpeaker-APK
-          path: StorySpeaker-v1.0.apk
+          name: StorySpeaker-UI-APK
+          path: StorySpeaker-v1.1-UI.apk
