@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    namespace 'com.tft.purchase'
+    namespace 'com.jx.smarttranslator'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.tft.purchase'
-        minSdk 23
+        applicationId 'com.jx.smarttranslator'
+        minSdk 28
         targetSdk 35
-        versionCode 1
-        versionName '1.0.0'
+        versionCode 4
+        versionName '0.4.0'
     }
 
     buildTypes {
@@ -24,8 +24,13 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    sourceSets {
+        main {
+            java.srcDirs = ['src/jx/java']
+        }
+    }
 }
 
 dependencies {
-    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
 }
