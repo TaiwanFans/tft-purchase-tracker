@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    namespace 'com.tft.purchase'
+    namespace 'com.jx.smarttranslator'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.tft.purchase'
-        minSdk 23
+        applicationId 'com.jx.smarttranslator'
+        minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName '1.0.0'
+        versionCode 3
+        versionName '0.3.0'
     }
 
     buildTypes {
@@ -24,8 +24,33 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    sourceSets {
+        main {
+            java.srcDirs = ["$buildDir/generated/jx"]
+        }
+    }
+}
+
+def generatedJxSource = file("$buildDir/generated/jx/com/jx/smarttranslator/MainActivity.java")
+def jxSourceParts = (1..4).collect { rootProject.file(".jx/MainActivity.java.gz.b64.part" + it) }
+
+tasks.register("prepareJxSource") {
+    inputs.files(jxSourceParts)
+    outputs.file(generatedJxSource)
+    doLast {
+        def b64 = jxSourceParts.collect { it.getText("UTF-8").trim() }.join("")
+        def compressed = java.util.Base64.getDecoder().decode(b64)
+        generatedJxSource.parentFile.mkdirs()
+        def gis = new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(compressed))
+        generatedJxSource.withOutputStream { out -> out << gis }
+        gis.close()
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("prepareJxSource")
 }
 
 dependencies {
-    implementation 'com.google.mlkit:text-recognition-chinese:16.0.1'
 }
