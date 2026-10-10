@@ -1,0 +1,31 @@
+name: Apply v2.0.9 editable UI patch
+
+on:
+  push:
+    branches: [v2-pixel-ux]
+    paths:
+      - 'tools/v209_patch.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v2-pixel-ux
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Patch AiMainActivity
+        run: python tools/v209_patch.py
+      - name: Commit patch
+        run: |
+          git config user.name "TFT Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add app/src/main/java/com/tft/purchase/AiMainActivity.java
+          git diff --cached --quiet && exit 0
+          git commit -m "Wire editable AI results into v2.0.9 UI"
+          git push origin HEAD:v2-pixel-ux
