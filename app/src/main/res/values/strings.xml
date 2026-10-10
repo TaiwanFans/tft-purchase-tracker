@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LocalPilot</string>
+    <string name="accessibility_description">讓 LocalPilot 在你的授權下讀取目前畫面並執行點擊、輸入、滑動、返回等操作。敏感操作會要求確認。</string>
+</resources>
